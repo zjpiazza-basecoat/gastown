@@ -499,16 +499,11 @@ func runHookShow(cmd *cobra.Command, args []string) error {
 	if len(args) > 0 && !isTownLevelRole(target) {
 		townRoot, townErr := workspace.FindFromCwd()
 		if townErr == nil && townRoot != "" {
-			agentBeadID := agentIDToBeadID(target, townRoot)
-			if agentBeadID != "" {
-				rigName := strings.Split(target, "/")[0]
-				var fallbackPath string
-				if rigName == "mayor" || rigName == "deacon" {
-					fallbackPath = townRoot
-				} else {
-					fallbackPath = filepath.Join(townRoot, rigName, "mayor", "rig")
-				}
-				workDir = beads.ResolveHookDir(townRoot, agentBeadID, fallbackPath)
+			rigName := strings.Split(target, "/")[0]
+			if rigName != "" && rigName != "mayor" && rigName != "deacon" {
+				// Agent beads can be stale or missing during recovery. The source
+				// work assignment is authoritative, so query the target rig DB directly.
+				workDir = filepath.Join(townRoot, rigName, "mayor", "rig")
 			}
 		}
 	}
