@@ -1731,11 +1731,15 @@ func prioritySeverityLabel(priority Priority) string {
 //
 // Skipped when:
 //   - No town root (can't use nudge queue)
+//   - Message type is TypeNotification (informational; no reply expected)
 //   - Message type is TypeReply (recipient is already replying)
 //   - Configured delay is zero or negative (feature disabled)
 func (r *Router) enqueueReplyReminder(msg *Message, sessionID string) {
 	if r.townRoot == "" {
 		return
+	}
+	if msg.Type == TypeNotification {
+		return // Informational mail should not pressure the recipient for a reply
 	}
 	if msg.Type == TypeReply {
 		return // Already a reply — reminder would be redundant
