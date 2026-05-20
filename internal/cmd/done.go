@@ -1086,7 +1086,7 @@ func runDone(cmd *cobra.Command, args []string) (retErr error) {
 		// 1. Explicit --target flag (highest priority — polecat knows its base branch).
 		// This is the most reliable path: the formula passes {{base_branch}} directly,
 		// avoiding any dependency on bd.Show() or Dolt availability.
-		if doneTarget != "" && doneTarget != defaultBranch {
+		if doneTarget != "" {
 			target = doneTarget
 			fmt.Printf("  Target branch: %s (from --target flag)\n", target)
 		}
