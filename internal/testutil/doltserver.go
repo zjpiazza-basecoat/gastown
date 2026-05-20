@@ -48,6 +48,29 @@ func isReaperRemovingErr(err error) bool {
 		strings.Contains(err.Error(), "removing")
 }
 
+func isDockerUnavailableErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "rootless docker not found") ||
+		strings.Contains(msg, "cannot connect to the docker daemon") ||
+		strings.Contains(msg, "no docker host")
+}
+
+func runDoltContainer(ctx context.Context) (ctr *dolt.DoltContainer, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("testcontainers docker unavailable: %v", r)
+		}
+	}()
+
+	return dolt.Run(ctx, DoltDockerImage,
+		dolt.WithDatabase("gt_test"),
+		testcontainers.WithEnv(map[string]string{"DOLT_ROOT_HOST": "%"}),
+	)
+}
+
 // runDoltContainerWithRetry calls dolt.Run, retrying on transient reaper
 // "removing" errors up to 3 times with exponential backoff.
 func runDoltContainerWithRetry(ctx context.Context) (*dolt.DoltContainer, error) {
@@ -55,10 +78,7 @@ func runDoltContainerWithRetry(ctx context.Context) (*dolt.DoltContainer, error)
 	delay := 2 * time.Second
 	var lastErr error
 	for attempt := range maxRetries {
-		ctr, err := dolt.Run(ctx, DoltDockerImage,
-			dolt.WithDatabase("gt_test"),
-			testcontainers.WithEnv(map[string]string{"DOLT_ROOT_HOST": "%"}),
-		)
+		ctr, err := runDoltContainer(ctx)
 		if err == nil {
 			return ctr, nil
 		}
@@ -110,6 +130,9 @@ func StartIsolatedDoltContainer(t *testing.T) string {
 	ctx := context.Background()
 	ctr, err := runDoltContainerWithRetry(ctx)
 	if err != nil {
+		if isDockerUnavailableErr(err) {
+			t.Skipf("Dolt container unavailable: %v", err)
+		}
 		t.Fatalf("starting Dolt container: %v", err)
 	}
 	t.Cleanup(func() {
@@ -150,6 +173,9 @@ func RequireDoltContainer(t *testing.T) {
 
 	doltCtrOnce.Do(startSharedDoltContainer)
 	if doltCtrErr != nil {
+		if isDockerUnavailableErr(doltCtrErr) {
+			t.Skipf("Dolt container unavailable: %v", doltCtrErr)
+		}
 		t.Fatalf("Dolt container setup failed: %v", doltCtrErr)
 	}
 }
