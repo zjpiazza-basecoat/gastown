@@ -254,6 +254,93 @@ func TestGetNotFound(t *testing.T) {
 	}
 }
 
+func TestFindIdlePolecatRequiresCleanReusableState(t *testing.T) {
+	townRoot := t.TempDir()
+	rigName := "gastown"
+	rigPath := filepath.Join(townRoot, rigName)
+	if err := os.MkdirAll(filepath.Join(townRoot, ".beads"), 0755); err != nil {
+		t.Fatalf("mkdir town beads: %v", err)
+	}
+	if err := beads.WriteRoutes(filepath.Join(townRoot, ".beads"), []beads.Route{
+		{Prefix: "gt-", Path: filepath.Join(rigName, "mayor", "rig")},
+	}); err != nil {
+		t.Fatalf("write routes: %v", err)
+	}
+
+	for _, name := range []string{"alpha-dirty", "bravo-missingmr", "charlie-openmr", "delta-closedmr"} {
+		if err := os.MkdirAll(filepath.Join(rigPath, "polecats", name, rigName), 0755); err != nil {
+			t.Fatalf("mkdir polecat %s: %v", name, err)
+		}
+	}
+
+	binDir := t.TempDir()
+	script := `#!/bin/sh
+cmd=""
+for arg in "$@"; do
+  case "$arg" in
+    --*) ;;
+    *) cmd="$arg"; break ;;
+  esac
+done
+
+case "$cmd" in
+  list)
+    printf '%s\n' '[]'
+    exit 0
+    ;;
+  show)
+    case "$*" in
+      *gt-gastown-polecat-alpha-dirty*)
+        printf '%s\n' '[{"id":"gt-gastown-polecat-alpha-dirty","title":"gt-gastown-polecat-alpha-dirty","issue_type":"task","labels":["gt:agent"],"status":"open","description":"role_type: polecat\nrig: gastown\nagent_state: idle\nhook_bead: null\ncleanup_status: has_unpushed\nactive_mr: null"}]'
+        exit 0
+        ;;
+      *gt-gastown-polecat-bravo-missingmr*)
+        printf '%s\n' '[{"id":"gt-gastown-polecat-bravo-missingmr","title":"gt-gastown-polecat-bravo-missingmr","issue_type":"task","labels":["gt:agent"],"status":"open","description":"role_type: polecat\nrig: gastown\nagent_state: idle\nhook_bead: null\ncleanup_status: clean\nactive_mr: gt-mr-missing"}]'
+        exit 0
+        ;;
+      *gt-gastown-polecat-charlie-openmr*)
+        printf '%s\n' '[{"id":"gt-gastown-polecat-charlie-openmr","title":"gt-gastown-polecat-charlie-openmr","issue_type":"task","labels":["gt:agent"],"status":"open","description":"role_type: polecat\nrig: gastown\nagent_state: idle\nhook_bead: null\ncleanup_status: clean\nactive_mr: gt-mr-open"}]'
+        exit 0
+        ;;
+      *gt-gastown-polecat-delta-closedmr*)
+        printf '%s\n' '[{"id":"gt-gastown-polecat-delta-closedmr","title":"gt-gastown-polecat-delta-closedmr","issue_type":"task","labels":["gt:agent"],"status":"open","description":"role_type: polecat\nrig: gastown\nagent_state: idle\nhook_bead: null\ncleanup_status: clean\nactive_mr: gt-mr-closed"}]'
+        exit 0
+        ;;
+      *gt-mr-open*)
+        printf '%s\n' '[{"id":"gt-mr-open","title":"open MR","issue_type":"task","status":"open","description":""}]'
+        exit 0
+        ;;
+      *gt-mr-closed*)
+        printf '%s\n' '[{"id":"gt-mr-closed","title":"closed MR","issue_type":"task","status":"closed","description":""}]'
+        exit 0
+        ;;
+    esac
+    printf '%s\n' '{"error":"not found"}' >&2
+    exit 1
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(binDir, "bd"), []byte(script), 0755); err != nil {
+		t.Fatalf("write mock bd: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	m := NewManager(&rig.Rig{Name: rigName, Path: rigPath}, git.NewGit(rigPath), nil)
+	idle, err := m.FindIdlePolecat()
+	if err != nil {
+		t.Fatalf("FindIdlePolecat: %v", err)
+	}
+	if idle == nil {
+		t.Fatal("FindIdlePolecat returned nil")
+	}
+	if idle.Name != "delta-closedmr" {
+		t.Fatalf("FindIdlePolecat = %s, want delta-closedmr", idle.Name)
+	}
+}
+
 func TestRemoveNotFound(t *testing.T) {
 	root := t.TempDir()
 	r := &rig.Rig{
