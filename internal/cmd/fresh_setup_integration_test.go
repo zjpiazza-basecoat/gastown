@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/steveyegge/gastown/internal/beads"
+	"github.com/steveyegge/gastown/internal/testutil"
 )
 
 var freshSetupIntegrationCounter atomic.Int32
@@ -30,24 +31,32 @@ func TestFreshInstallRigPolecatHookIntegration(t *testing.T) {
 
 	tmpDir := resolveSymlinks(t, t.TempDir())
 	hqPath := filepath.Join(tmpDir, "town")
-	doltPort := freeTCPPort(t)
-	doltPortString := strconv.Itoa(doltPort)
+	doltPortString := testutil.DoltContainerPort()
+	useExternalDolt := doltPortString != ""
+	if doltPortString == "" {
+		doltPortString = strconv.Itoa(freeTCPPort(t))
+	}
 
 	// createAutoConvoy and related helpers shell out with the process env.
 	t.Setenv("GT_DOLT_PORT", doltPortString)
 	t.Setenv("BEADS_DOLT_PORT", doltPortString)
+	if useExternalDolt {
+		t.Setenv("GT_TEST_EXTERNAL_DOLT", "1")
+	}
 
 	env := freshSetupIntegrationEnv(tmpDir, doltPortString)
 	configureGitIdentityForEnv(t, env)
 
 	gtBinary := buildGT(t)
 	runFreshSetupCmd(t, "", env, gtBinary, "install", hqPath, "--name", "test-town", "--git", "--dolt-port", doltPortString)
-	t.Cleanup(func() {
-		cmd := exec.Command(gtBinary, "dolt", "stop")
-		cmd.Dir = hqPath
-		cmd.Env = env
-		_ = cmd.Run()
-	})
+	if !freshSetupEnvHas(env, "GT_TEST_EXTERNAL_DOLT") {
+		t.Cleanup(func() {
+			cmd := exec.Command(gtBinary, "dolt", "stop")
+			cmd.Dir = hqPath
+			cmd.Env = env
+			_ = cmd.Run()
+		})
+	}
 
 	assertTownBeadsPrefix(t, hqPath)
 
@@ -127,7 +136,43 @@ func freshSetupIntegrationEnv(homeDir, doltPort string) []string {
 		}
 		clean = append(clean, entry)
 	}
-	return append(clean, "HOME="+homeDir, "GT_DOLT_PORT="+doltPort, "BEADS_DOLT_PORT="+doltPort)
+	clean = append(clean, "HOME="+homeDir, "GT_DOLT_PORT="+doltPort, "BEADS_DOLT_PORT="+doltPort)
+	if os.Getenv("GT_TEST_EXTERNAL_DOLT") != "" {
+		clean = append(clean, "GT_TEST_EXTERNAL_DOLT=1")
+	}
+	return clean
+}
+
+func freshSetupEnvHas(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestFreshSetupIntegrationEnvPreservesExternalDoltMarker(t *testing.T) {
+	t.Setenv("GT_TEST_EXTERNAL_DOLT", "1")
+	t.Setenv("GT_UNRELATED", "strip-me")
+	env := freshSetupIntegrationEnv(t.TempDir(), "43113")
+	got := map[string]string{}
+	for _, entry := range env {
+		parts := strings.SplitN(entry, "=", 2)
+		if len(parts) == 2 {
+			got[parts[0]] = parts[1]
+		}
+	}
+	if got["GT_TEST_EXTERNAL_DOLT"] != "1" {
+		t.Fatalf("GT_TEST_EXTERNAL_DOLT = %q, want 1 in %v", got["GT_TEST_EXTERNAL_DOLT"], env)
+	}
+	if got["GT_DOLT_PORT"] != "43113" || got["BEADS_DOLT_PORT"] != "43113" {
+		t.Fatalf("ports not normalized in %v", env)
+	}
+	if _, ok := got["GT_UNRELATED"]; ok {
+		t.Fatalf("GT_UNRELATED should be stripped from %v", env)
+	}
 }
 
 func configureGitIdentityForEnv(t *testing.T, env []string) {

@@ -602,6 +602,7 @@ func runDoltStatus(cmd *cobra.Command, args []string) error {
 					style.Bold.Render("SERVER IS READ-ONLY — contact the remote server admin"))
 			}
 		}
+		printDoltListenerFindings(townRoot)
 		return nil
 	}
 
@@ -675,6 +676,7 @@ func runDoltStatus(cmd *cobra.Command, args []string) error {
 				fmt.Printf("    %s %s\n", style.Bold.Render("!"), w)
 			}
 		}
+		printDoltListenerFindings(townRoot)
 	} else {
 		fmt.Printf("%s Dolt server is %s\n",
 			style.Dim.Render("○"),
@@ -699,9 +701,39 @@ func runDoltStatus(cmd *cobra.Command, args []string) error {
 			}
 			fmt.Printf("\nStart with: %s\n", style.Dim.Render("gt dolt start"))
 		}
+		printDoltListenerFindings(townRoot)
 	}
 
 	return nil
+}
+
+func printDoltListenerFindings(townRoot string) {
+	findings := doltserver.ClassifyDoltListeners(townRoot)
+	var extra []doltserver.DoltServerFinding
+	for _, f := range findings {
+		if f.Kind == doltserver.DoltServerProduction {
+			continue
+		}
+		extra = append(extra, f)
+	}
+	if len(extra) == 0 {
+		return
+	}
+
+	fmt.Printf("\n  %s Additional Dolt listener(s):\n", style.Bold.Render("!"))
+	for _, f := range extra {
+		fmt.Printf("    - PID %d port %d: %s", f.PID, f.Port, f.Kind)
+		if f.OwnerPath != "" {
+			fmt.Printf(" (%s)", style.Dim.Render(f.OwnerPath))
+		}
+		fmt.Println()
+		if f.Reason != "" {
+			fmt.Printf("      %s\n", style.Dim.Render(f.Reason))
+		}
+		if f.SafeToTerminate {
+			fmt.Printf("      Fix with: %s\n", style.Dim.Render("gt doctor --fix"))
+		}
+	}
 }
 
 func runDoltLogs(cmd *cobra.Command, args []string) error {

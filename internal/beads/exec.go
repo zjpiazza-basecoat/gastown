@@ -32,6 +32,7 @@ func Command(dir, fallbackBeadsDir string, mode SubprocessEnvMode, args ...strin
 func CommandContext(ctx context.Context, dir, fallbackBeadsDir string, mode SubprocessEnvMode, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "bd", args...) //nolint:gosec // G204: args are constructed internally
 	ConfigureCommand(cmd, dir, fallbackBeadsDir, mode)
+	util.SetProcessGroup(cmd)
 	return cmd
 }
 

@@ -3755,6 +3755,27 @@ func TestBuildRoutingEnv_OverridesStaleDoltPortFromBeadsDir(t *testing.T) {
 	}
 }
 
+func TestBuildEnv_IsolatedWithPortOverridesInheritedDoltPort(t *testing.T) {
+	t.Setenv("GT_DOLT_PORT", "3307")
+	t.Setenv("BEADS_DOLT_PORT", "3307")
+	b := NewIsolatedWithPort(t.TempDir(), 43113)
+
+	for name, env := range map[string][]string{
+		"run":     b.buildRunEnv(),
+		"routing": b.buildRoutingEnv(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := envMap(env)
+			if got["GT_DOLT_PORT"] != "43113" {
+				t.Fatalf("GT_DOLT_PORT = %q, want 43113 in %v", got["GT_DOLT_PORT"], env)
+			}
+			if got["BEADS_DOLT_PORT"] != "43113" {
+				t.Fatalf("BEADS_DOLT_PORT = %q, want 43113 in %v", got["BEADS_DOLT_PORT"], env)
+			}
+		})
+	}
+}
+
 func TestIsSubprocessCrash(t *testing.T) {
 	tests := []struct {
 		name string

@@ -107,6 +107,7 @@ Dolt checks:
   - dolt-metadata            Check dolt metadata tables exist
   - dolt-server-reachable    Check dolt sql-server is reachable
   - dolt-orphaned-databases  Detect orphaned dolt databases
+  - dolt-orphaned-test-servers Detect orphaned random-port dolt test servers
 
 Patrol checks:
   - patrol-molecules-exist   Verify patrol molecules exist
@@ -194,7 +195,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	d.Register(doctor.NewOverlayHealthCheck())
 	d.Register(doctor.NewPrefixConflictCheck())
 	d.Register(doctor.NewRigNameMismatchCheck())
-	d.Register(doctor.NewRigConfigSyncCheck()) // Check all registered rigs have config.json
+	d.Register(doctor.NewRigConfigSyncCheck())      // Check all registered rigs have config.json
 	d.Register(doctor.NewStaleDoltPortCheck())      // Check for stale Dolt port files
 	d.Register(doctor.NewStaleSQLServerInfoCheck()) // Check for stale sql-server.info files (GH#2770)
 	d.Register(doctor.NewPrefixMismatchCheck())
@@ -278,6 +279,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	// Dolt data health checks (binary + server reachability moved to top as prerequisites)
 	d.Register(doctor.NewDoltMetadataCheck())
 	d.Register(doctor.NewDoltOrphanedDatabaseCheck())
+	d.Register(doctor.NewDoltOrphanedTestServerCheck())
 	d.Register(doctor.NewUnregisteredBeadsDirsCheck())
 	d.Register(doctor.NewNullAssigneeCheck())
 

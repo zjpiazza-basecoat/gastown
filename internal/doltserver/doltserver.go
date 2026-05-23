@@ -1048,6 +1048,40 @@ type DoltListener struct {
 	Port int
 }
 
+// DoltServerFindingKind describes a local Dolt TCP listener relative to the
+// current Gas Town workspace.
+type DoltServerFindingKind string
+
+const (
+	DoltServerProduction      DoltServerFindingKind = "production"
+	DoltServerSamePortForeign DoltServerFindingKind = "same-port-foreign"
+	DoltServerOrphanedTest    DoltServerFindingKind = "orphaned-test"
+	DoltServerActiveTest      DoltServerFindingKind = "active-test"
+	DoltServerUnknown         DoltServerFindingKind = "unknown"
+)
+
+// DoltServerFinding is a safety-classified local Dolt listener.
+type DoltServerFinding struct {
+	PID             int
+	PPID            int
+	Port            int
+	Kind            DoltServerFindingKind
+	DataDir         string
+	ConfigPath      string
+	CWD             string
+	OwnerPath       string
+	SafeToTerminate bool
+	Reason          string
+}
+
+type doltProcessEvidence struct {
+	DataDir    string
+	ConfigPath string
+	CWD        string
+	StateDir   string
+	PPID       int
+}
+
 // FindAllDoltListeners discovers all Dolt processes with TCP listeners using lsof.
 // Uses process binary name matching (-c dolt) instead of command-line string matching
 // (pgrep -f), avoiding fragile ps/pgrep pattern coupling (ZFC fix: gt-fj87).
@@ -1104,6 +1138,188 @@ func FindAllDoltListeners() []DoltListener {
 		}
 	}
 	return listeners
+}
+
+// ClassifyDoltListeners returns every local Dolt TCP listener with enough
+// ownership evidence to distinguish production, same-port foreign, and
+// random-port test-orphan cases. Unknown listeners are report-only.
+func ClassifyDoltListeners(townRoot string) []DoltServerFinding {
+	listeners := FindAllDoltListeners()
+	findings := make([]DoltServerFinding, 0, len(listeners))
+	cfg := DefaultConfig(townRoot)
+	for _, l := range listeners {
+		finding := classifyDoltListener(townRoot, cfg, l, doltProcessEvidence{
+			DataDir:    GetDoltDataDirFromProcess(l.PID),
+			ConfigPath: getDoltConfigPathFromProcess(l.PID),
+			CWD:        getProcessCWD(l.PID),
+			StateDir:   getServerDataDir(townRoot, l.PID),
+			PPID:       getProcessPPID(l.PID),
+		})
+		findings = append(findings, finding)
+	}
+	return findings
+}
+
+// FindOrphanedTestDoltServers returns the random-port Dolt listeners that are
+// both orphaned and safe enough for doctor --fix to clean up automatically.
+func FindOrphanedTestDoltServers(townRoot string) []DoltServerFinding {
+	findings := ClassifyDoltListeners(townRoot)
+	orphans := make([]DoltServerFinding, 0, len(findings))
+	for _, f := range findings {
+		if f.Kind == DoltServerOrphanedTest {
+			orphans = append(orphans, f)
+		}
+	}
+	return orphans
+}
+
+// TerminateOrphanedTestDoltServers revalidates and stops only safe, temp-owned
+// orphan test Dolt listeners. It never targets the configured production port.
+func TerminateOrphanedTestDoltServers(townRoot string) ([]DoltServerFinding, error) {
+	var terminated []DoltServerFinding
+	for _, f := range FindOrphanedTestDoltServers(townRoot) {
+		if !f.SafeToTerminate {
+			continue
+		}
+
+		// Re-scan immediately before signaling to avoid stale PID/port decisions.
+		current := ClassifyDoltListeners(townRoot)
+		var match *DoltServerFinding
+		for i := range current {
+			if current[i].PID == f.PID && current[i].Port == f.Port {
+				match = &current[i]
+				break
+			}
+		}
+		if match == nil || match.Kind != DoltServerOrphanedTest || !match.SafeToTerminate {
+			continue
+		}
+		if err := terminateDoltPID(match.PID); err != nil {
+			return terminated, err
+		}
+		terminated = append(terminated, *match)
+	}
+	return terminated, nil
+}
+
+func classifyDoltListener(townRoot string, cfg *Config, l DoltListener, ev doltProcessEvidence) DoltServerFinding {
+	finding := DoltServerFinding{
+		PID:        l.PID,
+		PPID:       ev.PPID,
+		Port:       l.Port,
+		DataDir:    ev.DataDir,
+		ConfigPath: ev.ConfigPath,
+		CWD:        ev.CWD,
+		OwnerPath:  doltProcessOwnerPathFromEvidence(ev.DataDir, ev.ConfigPath, ev.CWD, ev.StateDir),
+	}
+
+	matchesTown := cfg != nil && doltProcessMatchesTownPaths(cfg.DataDir, ev.DataDir, ev.ConfigPath, ev.CWD, ev.StateDir)
+	if cfg != nil && l.Port == cfg.Port {
+		if matchesTown {
+			finding.Kind = DoltServerProduction
+			finding.Reason = "configured production Dolt server"
+		} else {
+			finding.Kind = DoltServerSamePortForeign
+			finding.Reason = "configured port held by a different Dolt data directory"
+		}
+		return finding
+	}
+
+	if matchesTown {
+		finding.Kind = DoltServerProduction
+		finding.Reason = "matches this workspace's Dolt data directory"
+		return finding
+	}
+
+	testOwned := hasSafeTempDoltEvidence(ev)
+	switch {
+	case ev.PPID == 1 && testOwned:
+		finding.Kind = DoltServerOrphanedTest
+		finding.SafeToTerminate = true
+		finding.Reason = "random-port Dolt listener is orphaned and has temp test ownership evidence"
+	case testOwned:
+		finding.Kind = DoltServerActiveTest
+		finding.Reason = "random-port Dolt listener has temp test ownership evidence but is not orphaned"
+	default:
+		finding.Kind = DoltServerUnknown
+		finding.Reason = "random-port Dolt listener lacks safe test ownership evidence"
+	}
+	return finding
+}
+
+func hasSafeTempDoltEvidence(ev doltProcessEvidence) bool {
+	for _, path := range []string{ev.DataDir, ev.ConfigPath, ev.CWD, ev.StateDir} {
+		if isTempDoltDataPath(path) {
+			return true
+		}
+	}
+	return false
+}
+
+func isTempDoltDataPath(path string) bool {
+	if path == "" {
+		return false
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	tmpDir, err := filepath.Abs(os.TempDir())
+	if err != nil {
+		return false
+	}
+	if !pathWithin(absPath, tmpDir) {
+		return false
+	}
+	parts := strings.Split(filepath.Clean(absPath), string(os.PathSeparator))
+	for _, part := range parts {
+		if part == ".dolt-data" {
+			return true
+		}
+	}
+	return strings.HasSuffix(absPath, string(os.PathSeparator)+"config.yaml") && strings.Contains(absPath, string(os.PathSeparator)+".dolt-data"+string(os.PathSeparator))
+}
+
+func pathWithin(path, root string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." {
+		return err == nil
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
+func getProcessPPID(pid int) int {
+	if runtime.GOOS == "windows" {
+		return 0
+	}
+	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "ppid=")
+	setProcessGroup(cmd)
+	out, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+	ppid, _ := strconv.Atoi(strings.TrimSpace(string(out)))
+	return ppid
+}
+
+func terminateDoltPID(pid int) error {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("finding orphaned test Dolt PID %d: %w", pid, err)
+	}
+	if err := gracefulTerminate(process); err != nil {
+		return fmt.Errorf("stopping orphaned test Dolt PID %d: %w", pid, err)
+	}
+	for i := 0; i < 10; i++ {
+		time.Sleep(250 * time.Millisecond)
+		if !processIsAlive(pid) {
+			return nil
+		}
+	}
+	if err := process.Kill(); err != nil {
+		return fmt.Errorf("force stopping orphaned test Dolt PID %d: %w", pid, err)
+	}
+	return nil
 }
 
 // isDoltServerOnPort checks if a dolt server is accepting connections on the given port.

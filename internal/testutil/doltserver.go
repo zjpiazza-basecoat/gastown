@@ -4,9 +4,11 @@ package testutil
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -30,6 +32,34 @@ var (
 	dockerOnce  sync.Once
 	dockerAvail bool
 )
+
+func externalDoltPortFromEnv() string {
+	if os.Getenv("GT_TEST_EXTERNAL_DOLT") == "" {
+		return ""
+	}
+	for _, key := range []string{"GT_DOLT_PORT", "BEADS_DOLT_PORT"} {
+		port := strings.TrimSpace(os.Getenv(key))
+		if port == "" {
+			continue
+		}
+		if _, err := strconv.Atoi(port); err == nil && externalDoltReachable(port) {
+			return port
+		}
+	}
+	return ""
+}
+
+func externalDoltReachable(port string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	dsn := fmt.Sprintf("root:@tcp(127.0.0.1:%s)/?timeout=2s&readTimeout=2s&writeTimeout=2s", port)
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return false
+	}
+	defer db.Close()
+	return db.PingContext(ctx) == nil
+}
 
 // isDockerAvailable returns true if the Docker daemon is reachable.
 // The result is cached after the first call.
@@ -77,6 +107,14 @@ func runDoltContainerWithRetry(ctx context.Context) (*dolt.DoltContainer, error)
 // startSharedDoltContainer starts the shared Dolt container and sets
 // GT_DOLT_PORT and BEADS_DOLT_PORT process-wide.
 func startSharedDoltContainer() {
+	if port := externalDoltPortFromEnv(); port != "" {
+		doltCtrPort = port
+		os.Setenv("GT_DOLT_PORT", port)         //nolint:tenv // intentional process-wide env
+		os.Setenv("BEADS_DOLT_PORT", port)      //nolint:tenv // intentional process-wide env
+		os.Setenv("GT_TEST_EXTERNAL_DOLT", "1") //nolint:tenv // borrowed server marker
+		return
+	}
+
 	ctx := context.Background()
 	ctr, err := runDoltContainerWithRetry(ctx)
 	if err != nil {
@@ -125,6 +163,8 @@ func StartIsolatedDoltContainer(t *testing.T) string {
 
 	portStr := port.Port()
 	t.Setenv("GT_DOLT_PORT", portStr)
+	t.Setenv("BEADS_DOLT_PORT", portStr)
+	t.Setenv("GT_TEST_EXTERNAL_DOLT", "1")
 	return portStr
 }
 

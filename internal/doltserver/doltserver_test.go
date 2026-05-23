@@ -424,6 +424,71 @@ func TestDoltProcessOwnerPathFromEvidence(t *testing.T) {
 	}
 }
 
+func TestClassifyDoltListener(t *testing.T) {
+	townRoot := filepath.Join(t.TempDir(), "town")
+	cfg := &Config{Port: 4407, DataDir: filepath.Join(townRoot, ".dolt-data")}
+	tempTown := filepath.Join(t.TempDir(), "test-town")
+	tempDataDir := filepath.Join(tempTown, ".dolt-data")
+
+	tests := []struct {
+		name     string
+		listener DoltListener
+		evidence doltProcessEvidence
+		kind     DoltServerFindingKind
+		safe     bool
+	}{
+		{
+			name:     "configured production port is production",
+			listener: DoltListener{PID: 101, Port: 4407},
+			evidence: doltProcessEvidence{ConfigPath: filepath.Join(cfg.DataDir, "config.yaml"), PPID: 1},
+			kind:     DoltServerProduction,
+		},
+		{
+			name:     "same port foreign is not test orphan",
+			listener: DoltListener{PID: 102, Port: 4407},
+			evidence: doltProcessEvidence{ConfigPath: filepath.Join(tempDataDir, "config.yaml"), PPID: 1},
+			kind:     DoltServerSamePortForeign,
+		},
+		{
+			name:     "random temp orphan is safe",
+			listener: DoltListener{PID: 103, Port: 45123},
+			evidence: doltProcessEvidence{ConfigPath: filepath.Join(tempDataDir, "config.yaml"), PPID: 1},
+			kind:     DoltServerOrphanedTest,
+			safe:     true,
+		},
+		{
+			name:     "random temp active is not safe",
+			listener: DoltListener{PID: 104, Port: 45124},
+			evidence: doltProcessEvidence{DataDir: tempDataDir, PPID: os.Getpid()},
+			kind:     DoltServerActiveTest,
+		},
+		{
+			name:     "random non-temp orphan is unknown",
+			listener: DoltListener{PID: 105, Port: 45125},
+			evidence: doltProcessEvidence{ConfigPath: "/var/lib/dolt/config.yaml", PPID: 1},
+			kind:     DoltServerUnknown,
+		},
+		{
+			name:     "random current town owner is production",
+			listener: DoltListener{PID: 106, Port: 45126},
+			evidence: doltProcessEvidence{DataDir: cfg.DataDir, PPID: 1},
+			kind:     DoltServerProduction,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := classifyDoltListener(townRoot, cfg, tt.listener, tt.evidence)
+			if got.Kind != tt.kind {
+				t.Fatalf("Kind = %q, want %q (finding %+v)", got.Kind, tt.kind, got)
+			}
+			if got.SafeToTerminate != tt.safe {
+				t.Fatalf("SafeToTerminate = %v, want %v (finding %+v)", got.SafeToTerminate, tt.safe, got)
+			}
+		})
+	}
+}
+
 func TestGetHealthMetrics_NoServer(t *testing.T) {
 	townRoot := t.TempDir()
 
