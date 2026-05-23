@@ -46,7 +46,7 @@ func resolveBeadDir(beadID string) string {
 	if err != nil {
 		return "."
 	}
-	townBeadsDir := filepath.Join(townRoot, ".beads")
+	townBeadsDir := beads.GetTownBeadsPath(townRoot)
 	resolved := beads.ResolveBeadsDirForID(townBeadsDir, beadID)
 	// Return the parent of the .beads directory so bd discovers it naturally.
 	// For town-level beads this returns townRoot; for rig beads it returns
@@ -319,11 +319,11 @@ func verifyBeadExistsInTargetRigDatabase(beadID, targetRig, townRoot string) err
 		return fmt.Errorf("cannot verify bead %s in target rig %q: town root is unavailable; refusing to sling before creating hooks or molecule side effects", beadID, targetRig)
 	}
 
-	targetRigDir := beads.GetRigDirForName(townRoot, targetRig)
-	if targetRigDir == "" {
+	_, targetBeadsDir := beads.ResolveRigBeadsDirForName(townRoot, targetRig)
+	if targetBeadsDir == beads.GetTownBeadsPath(townRoot) {
 		return fmt.Errorf("cannot resolve target rig %q beads database for bead %s; refusing to sling before creating hooks or molecule side effects", targetRig, beadID)
 	}
-	targetBeadsDir := filepath.Join(targetRigDir, ".beads")
+	targetRigDir := filepath.Dir(targetBeadsDir)
 
 	out, err := BdCmd("--db", targetBeadsDir, "show", beadID, "--json", "--allow-stale").
 		Dir(targetRigDir).

@@ -426,6 +426,40 @@ func TestGetRigDirForName_TownLevelNotReturned(t *testing.T) {
 	}
 }
 
+func TestResolveRigBeadsDirForName(t *testing.T) {
+	tmpDir := t.TempDir()
+	townBeadsDir := filepath.Join(tmpDir, ".beads")
+	rigBeadsDir := filepath.Join(tmpDir, "gastown", "mayor", "rig", ".beads")
+	if err := os.MkdirAll(townBeadsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(rigBeadsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	routesContent := `{"prefix": "gt-", "path": "gastown/mayor/rig"}
+{"prefix": "hq-", "path": "."}
+`
+	if err := os.WriteFile(filepath.Join(townBeadsDir, "routes.jsonl"), []byte(routesContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prefix, beadsDir := ResolveRigBeadsDirForName(tmpDir, "gastown")
+	if prefix != "gt" {
+		t.Fatalf("prefix = %q, want gt", prefix)
+	}
+	if beadsDir != rigBeadsDir {
+		t.Fatalf("beadsDir = %q, want %q", beadsDir, rigBeadsDir)
+	}
+
+	prefix, beadsDir = ResolveRigBeadsDirForName(tmpDir, "missing")
+	if prefix != "gt" {
+		t.Fatalf("missing prefix = %q, want gt fallback", prefix)
+	}
+	if beadsDir != townBeadsDir {
+		t.Fatalf("missing beadsDir = %q, want town beads %q", beadsDir, townBeadsDir)
+	}
+}
+
 func TestCheckPrefixAvailable(t *testing.T) {
 	tmpDir := t.TempDir()
 	beadsDir := filepath.Join(tmpDir, ".beads")

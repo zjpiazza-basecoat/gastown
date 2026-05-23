@@ -445,32 +445,16 @@ func executeConvoyFormula(f *formula.Formula, formulaName, targetRig string) err
 	fmt.Printf("%s Executing convoy formula: %s\n\n",
 		style.Bold.Render("🚚"), formulaName)
 
-	// Get town root and resolve rig-scoped bead prefix
+	// Get town root and resolve rig-scoped bead prefix/DB.
 	townRoot, err := workspace.FindFromCwd()
 	if err != nil {
 		return fmt.Errorf("finding town root: %w", err)
 	}
-	townBeads := filepath.Join(townRoot, ".beads")
-
-	// Resolve the target rig's beads prefix and directory so convoy legs
-	// are created in the correct database. Legs need the rig prefix
-	// (not hq-) so polecats can resolve them via prefix routing.
-	rigPrefix := beads.GetPrefixForRig(townRoot, targetRig)
-	rigBeadsDir := townBeads // default to town beads
-	if rigPrefix != "hq" {
-		// Look up the rig's beads path from routes
-		routes, _ := beads.LoadRoutes(townBeads)
-		for _, r := range routes {
-			parts := strings.SplitN(r.Path, "/", 2)
-			if len(parts) > 0 && parts[0] == targetRig {
-				rigBeadsDir = filepath.Join(townRoot, r.Path, ".beads")
-				break
-			}
-		}
-	}
+	townBeads := beads.GetTownBeadsPath(townRoot)
+	rigPrefix, rigBeadsDir := beads.ResolveRigBeadsDirForName(townRoot, targetRig)
 
 	// Step 1: Create convoy bead
-	convoyID := fmt.Sprintf("%s-cv-%s", rigPrefix, generateFormulaShortID())
+	convoyID := fmt.Sprintf("hq-cv-%s", generateFormulaShortID())
 	convoyTitle := fmt.Sprintf("%s: %s", formulaName, f.Description)
 	if len(convoyTitle) > 80 {
 		convoyTitle = convoyTitle[:77] + "..."
@@ -624,7 +608,7 @@ func executeConvoyFormula(f *formula.Formula, formulaName, targetRig string) err
 		}
 
 		// Track the leg with the convoy
-		if err := addTrackingRelationFn(townBeads, convoyID, legBeadID); err != nil {
+		if err := addTrackingRelationFn(townRoot, convoyID, legBeadID); err != nil {
 			fmt.Printf("%s Failed to track leg %s: %v\n",
 				style.Dim.Render("Warning:"), leg.ID, err)
 		}
@@ -663,7 +647,7 @@ func executeConvoyFormula(f *formula.Formula, formulaName, targetRig string) err
 				style.Dim.Render("Warning:"), err)
 		} else {
 			// Track synthesis with convoy
-			_ = addTrackingRelationFn(townBeads, convoyID, synthesisBeadID)
+			_ = addTrackingRelationFn(townRoot, convoyID, synthesisBeadID)
 
 			// Add dependencies: synthesis depends on all legs
 			for _, legBeadID := range legBeads {
@@ -737,26 +721,13 @@ func executeWorkflowFormula(f *formula.Formula, formulaName, targetRig string) e
 		return fmt.Errorf("workflow formula '%s' has no steps", formulaName)
 	}
 
-	// Get town beads directory
+	// Get town root and resolve rig-scoped bead prefix/DB.
 	townRoot, err := workspace.FindFromCwd()
 	if err != nil {
 		return fmt.Errorf("finding town root: %w", err)
 	}
-	townBeads := filepath.Join(townRoot, ".beads")
-
-	// Resolve the target rig's beads prefix and directory
-	rigPrefix := beads.GetPrefixForRig(townRoot, targetRig)
-	rigBeadsDir := townBeads
-	if rigPrefix != "hq" {
-		routes, _ := beads.LoadRoutes(townBeads)
-		for _, r := range routes {
-			parts := strings.SplitN(r.Path, "/", 2)
-			if len(parts) > 0 && parts[0] == targetRig {
-				rigBeadsDir = filepath.Join(townRoot, r.Path, ".beads")
-				break
-			}
-		}
-	}
+	townBeads := beads.GetTownBeadsPath(townRoot)
+	rigPrefix, rigBeadsDir := beads.ResolveRigBeadsDirForName(townRoot, targetRig)
 
 	// Step 1: Create workflow root bead
 	workflowID := fmt.Sprintf("hq-wf-%s", generateFormulaShortID())
@@ -826,7 +797,7 @@ func executeWorkflowFormula(f *formula.Formula, formulaName, targetRig string) e
 		}
 
 		// Track the step with the workflow
-		_ = addTrackingRelationFn(townBeads, workflowID, stepBeadID)
+		_ = addTrackingRelationFn(townRoot, workflowID, stepBeadID)
 
 		// Wire dependencies: this step depends on its needs
 		for _, needID := range step.Needs {

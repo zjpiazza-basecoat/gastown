@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +14,24 @@ import (
 	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/formula"
 )
+
+func writeGTStub(t *testing.T, binDir string, unixScript string, windowsScript string) string {
+	t.Helper()
+
+	if runtime.GOOS == "windows" {
+		path := filepath.Join(binDir, "gt.cmd")
+		if err := os.WriteFile(path, []byte(windowsScript), 0o644); err != nil {
+			t.Fatalf("write gt stub: %v", err)
+		}
+		return path
+	}
+
+	path := filepath.Join(binDir, "gt")
+	if err := os.WriteFile(path, []byte(unixScript), 0o755); err != nil {
+		t.Fatalf("write gt stub: %v", err)
+	}
+	return path
+}
 
 // TestAutoInferRig verifies the rig auto-selection logic used when --rig is
 // not provided and cwd-based detection finds nothing (e.g. Deacon at HQ level
@@ -159,6 +178,112 @@ func TestBuildConvoyLegSlingArgs_AlwaysIncludesNoConvoy(t *testing.T) {
 				t.Errorf("first arg must be 'sling', got %q", got[0])
 			}
 		})
+	}
+}
+
+func TestExecuteConvoyFormulaRoutesRootToHQAndLegsToTargetRig(t *testing.T) {
+	townRoot := t.TempDir()
+	townBeadsDir := filepath.Join(townRoot, ".beads")
+	rigDir := filepath.Join(townRoot, "gastown", "mayor", "rig")
+	rigBeadsDir := filepath.Join(rigDir, ".beads")
+	workDir := filepath.Join(townRoot, "gastown", "polecats", "pipboy", "gastown")
+	for _, dir := range []string{filepath.Join(townRoot, "mayor"), townBeadsDir, rigBeadsDir, workDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(townRoot, "mayor", "town.json"), []byte(`{"name":"test"}`), 0o644); err != nil {
+		t.Fatalf("write town.json: %v", err)
+	}
+	routes := strings.Join([]string{
+		`{"prefix":"gt-","path":"gastown/mayor/rig"}`,
+		`{"prefix":"hq-","path":"."}`,
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(townBeadsDir, "routes.jsonl"), []byte(routes), 0o644); err != nil {
+		t.Fatalf("write routes: %v", err)
+	}
+
+	binDir := filepath.Join(townRoot, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	bdLog := filepath.Join(townRoot, "bd.log")
+	gtLog := filepath.Join(townRoot, "gt.log")
+	bdScript := `#!/bin/sh
+printf '%s|%s|%s\n' "$(pwd)" "${BEADS_DIR:-}" "$*" >> "$BD_LOG"
+exit 0
+`
+	bdScriptWindows := `@echo off
+echo %CD%^|%BEADS_DIR%^|%*>>"%BD_LOG%"
+exit /b 0
+`
+	gtScript := `#!/bin/sh
+printf '%s|%s\n' "$(pwd)" "$*" >> "$GT_LOG"
+exit 0
+`
+	gtScriptWindows := `@echo off
+echo %CD%^|%*>>"%GT_LOG%"
+exit /b 0
+`
+	writeBDStub(t, binDir, bdScript, bdScriptWindows)
+	writeGTStub(t, binDir, gtScript, gtScriptWindows)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("BD_LOG", bdLog)
+	t.Setenv("GT_LOG", gtLog)
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get cwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatalf("chdir workDir: %v", err)
+	}
+
+	oldAddTracking := addTrackingRelationFn
+	t.Cleanup(func() { addTrackingRelationFn = oldAddTracking })
+	var tracked []string
+	addTrackingRelationFn = func(root, trackerID, issueID string) error {
+		tracked = append(tracked, root+"|"+trackerID+"|"+issueID)
+		return nil
+	}
+
+	f := &formula.Formula{
+		Description: "review changes",
+		Legs: []formula.Leg{{
+			ID:          "readability",
+			Title:       "Readability",
+			Focus:       "structure",
+			Description: "Review structure",
+		}},
+		Synthesis: &formula.Synthesis{Title: "Synthesize"},
+	}
+	if err := executeConvoyFormula(f, "code-review", "gastown"); err != nil {
+		t.Fatalf("executeConvoyFormula: %v", err)
+	}
+
+	bdBytes, err := os.ReadFile(bdLog)
+	if err != nil {
+		t.Fatalf("read bd log: %v", err)
+	}
+	bdText := string(bdBytes)
+	if !strings.Contains(bdText, townBeadsDir+"|") || !strings.Contains(bdText, "--id=hq-cv-") {
+		t.Fatalf("bd log missing HQ convoy create: %s", bdText)
+	}
+	if !strings.Contains(bdText, rigBeadsDir+"|") || !strings.Contains(bdText, "--id=gt-leg-") {
+		t.Fatalf("bd log missing target-rig leg create: %s", bdText)
+	}
+	if !strings.Contains(bdText, rigBeadsDir+"|") || !strings.Contains(bdText, "--id=gt-syn-") {
+		t.Fatalf("bd log missing target-rig synthesis create: %s", bdText)
+	}
+	if len(tracked) != 2 {
+		t.Fatalf("tracked relations = %v, want leg and synthesis", tracked)
+	}
+	for _, got := range tracked {
+		if !strings.HasPrefix(got, townRoot+"|hq-cv-") {
+			t.Fatalf("tracking relation used wrong town root or tracker ID: %v", tracked)
+		}
 	}
 }
 

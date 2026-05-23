@@ -307,6 +307,23 @@ func GetRigDirForName(townRoot, rigName string) string {
 	return ""
 }
 
+// ResolveRigBeadsDirForName returns the route-resolved beads prefix and .beads
+// directory for a named rig. townRoot must be the Gas Town root, not townRoot/.beads.
+// The prefix is returned without the trailing hyphen. If the rig route cannot be
+// resolved, the town-level beads directory is returned as the conservative fallback.
+func ResolveRigBeadsDirForName(townRoot, rigName string) (string, string) {
+	prefix := GetPrefixForRig(townRoot, rigName)
+	beadsDir := GetTownBeadsPath(townRoot)
+
+	if rigDir := GetRigDirForName(townRoot, rigName); rigDir != "" {
+		if resolved := ResolveBeadsDir(rigDir); resolved != "" {
+			beadsDir = resolved
+		}
+	}
+
+	return prefix, beadsDir
+}
+
 // GetRigNameForPrefix returns the rig name that owns a given bead prefix.
 // For example, "gt-" returns "gastown", "bd-" returns "beads".
 // Returns empty string if the prefix is town-level (path=".") or not found in routes.
