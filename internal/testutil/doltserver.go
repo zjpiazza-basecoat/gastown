@@ -141,6 +141,12 @@ func startSharedDoltContainer() {
 // The container is terminated automatically when the test finishes.
 func StartIsolatedDoltContainer(t *testing.T) string {
 	t.Helper()
+	if port := externalDoltPortFromEnv(); port != "" {
+		t.Setenv("GT_DOLT_PORT", port)
+		t.Setenv("BEADS_DOLT_PORT", port)
+		t.Setenv("GT_TEST_EXTERNAL_DOLT", "1")
+		return port
+	}
 	if !isDockerAvailable() {
 		t.Skip("Docker not available, skipping test")
 	}
@@ -172,7 +178,7 @@ func StartIsolatedDoltContainer(t *testing.T) string {
 // TestMain functions. Call TerminateDoltContainer() after m.Run() to clean up.
 // Sets both GT_DOLT_PORT and BEADS_DOLT_PORT process-wide.
 func EnsureDoltContainerForTestMain() error {
-	if !isDockerAvailable() {
+	if externalDoltPortFromEnv() == "" && !isDockerAvailable() {
 		return fmt.Errorf("Docker not available")
 	}
 
@@ -184,7 +190,7 @@ func EnsureDoltContainerForTestMain() error {
 // test if Docker is not available.
 func RequireDoltContainer(t *testing.T) {
 	t.Helper()
-	if !isDockerAvailable() {
+	if externalDoltPortFromEnv() == "" && !isDockerAvailable() {
 		t.Skip("Docker not available, skipping test")
 	}
 
