@@ -1729,7 +1729,7 @@ func runPolecatNuke(cmd *cobra.Command, args []string) error {
 
 	for _, p := range targets {
 		if polecatNukeDryRun {
-			blocked := checkPolecatSafety(p).Blocked
+			blocked := !polecatNukeForce && checkPolecatSafety(p).Blocked
 			if blocked {
 				fmt.Printf("Would refuse to nuke %s/%s without --force:\n", p.rigName, p.polecatName)
 				dryRunBlocked++
