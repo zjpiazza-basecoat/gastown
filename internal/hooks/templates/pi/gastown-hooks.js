@@ -1,15 +1,16 @@
-// Gas Town Pi Extension — Enhanced (with per-prompt mail check)
+// Gas Town Pi Extension — Enhanced (role-aware mail delivery)
 // Deploys the same lifecycle hooks as Claude's settings-autonomous.json
 // but using pi's extension API.
 //
 // Events mapped:
 //   session_start       → gt prime --hook (capture context)
-//   before_agent_start  → inject captured context + check mail every prompt
+//   before_agent_start  → inject captured context + worker mail checks
 //   tool_call           → gt tap guard pr-workflow (on git push/pr create)
 //   session_shutdown    → gt costs record
 //
-// Enhancement over upstream: mail is checked on every prompt (throttled to
-// 30s) via before_agent_start, matching Claude's UserPromptSubmit behavior.
+// Human coordination surfaces (Mayor/top layer) are mail-first and never inject
+// mail into the active chat buffer. Autonomous workers may still receive injected
+// mail/context for propulsion.
 //
 // Loaded via: pi -e gastown-hooks.js
 
@@ -19,8 +20,10 @@ export default (pi) => {
   let contextInjected = false;
   let lastMailCheck = 0;
 
-  const shouldCheckMail = () =>
-    !role.includes("witness") && !role.includes("refinery") && !role.startsWith("deacon") && !role.includes("boot");
+  const isHumanCoordinationSurface = () =>
+    role === "mayor" || role === "mayor/" || role === "overseer" || role === "human";
+
+  const shouldInjectMail = () => !isHumanCoordinationSurface();
 
   // SessionStart — run gt prime and capture context for injection
   pi.on("session_start", async (event, context) => {
@@ -38,13 +41,14 @@ export default (pi) => {
 
   });
 
-  // BeforeAgentStart — inject prime context + check mail every prompt
+  // BeforeAgentStart — inject prime context + worker mail checks
   pi.on("before_agent_start", async (event, context) => {
     let mailContext = null;
 
-    // Check mail on every prompt (throttled to once per 30s)
+    // Check mail for autonomous workers only (throttled to once per 30s).
+    // Mayor/human coordination surfaces use durable mail + passive Pi UI instead.
     const now = Date.now();
-    if (shouldCheckMail() && now - lastMailCheck >= 30000) {
+    if (shouldInjectMail() && now - lastMailCheck >= 30000) {
       lastMailCheck = now;
       try {
         const mailResult = await pi.exec("gt", ["mail", "check", "--inject"]);
