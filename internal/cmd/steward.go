@@ -229,6 +229,75 @@ clone_or_update() {
   log "$name candidate $(git -C "$dst" rev-parse --short HEAD)"
 }
 
+health_has_findings() {
+  local file="$1"
+  python3 - "$file" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        data = json.load(f)
+except Exception:
+    sys.exit(0)
+server = data.get("server") or {}
+processes = data.get("processes") or {}
+if server.get("running") is False:
+    sys.exit(0)
+if int(processes.get("zombie_count") or 0) > 0:
+    sys.exit(0)
+if data.get("orphans"):
+    sys.exit(0)
+sys.exit(1)
+PY
+}
+
+create_unhealthy_proposal_once() {
+  local details
+  details=$(python3 - "$STATE/health-after.json" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        data = json.load(f)
+except Exception as exc:
+    print(f"Could not parse health JSON: {exc}")
+    sys.exit(0)
+print(json.dumps(data, indent=2)[:6000])
+PY
+)
+  /home/d3adb0y/.local/bin/gt steward proposal create \
+    --kind health \
+    --title "Gas Town health still unhealthy after safe reconciliation" \
+    --summary "Steward safe health reconciliation ran, but gt health still reports findings that require manual review." \
+    --details "$details" \
+    --risk "Manual cleanup may be destructive; inspect the health JSON before approving any force cleanup or process changes." || true
+}
+
+reconcile_health_once() {
+  log "health scan"
+  timeout 120 /home/d3adb0y/.local/bin/gt steward scan >>"$LOG" 2>&1 || log "steward scan timed out/failed; continuing"
+  if ! timeout 30 /home/d3adb0y/.local/bin/gt health --json >"$STATE/health-before.json" 2>>"$LOG"; then
+    log "gt health unavailable; skipping automatic health reconciliation"
+    return 0
+  fi
+  if health_has_findings "$STATE/health-before.json"; then
+    log "gt health findings detected; running safe reconciliation"
+    timeout 90 /home/d3adb0y/.local/bin/gt steward reconcile-health >>"$LOG" 2>&1 || log "reconcile-health timed out/failed; continuing"
+    timeout 30 /home/d3adb0y/.local/bin/gt health --json >"$STATE/health-after.json" 2>>"$LOG" || true
+    if health_has_findings "$STATE/health-after.json"; then
+      log "gt health remains unhealthy after safe reconciliation; creating/deduping proposal"
+      create_unhealthy_proposal_once
+    else
+      log "gt health healthy after reconciliation"
+    fi
+  else
+    log "gt health healthy"
+  fi
+}
+
+reconcile_polecats_once() {
+  log "polecat recovery reconciliation"
+  timeout 180 /home/d3adb0y/.local/bin/gt steward reconcile-polecats --rig app --limit 5 >>"$LOG" 2>&1 || log "reconcile-polecats timed out/failed; continuing"
+}
+
 validate_once() {
   local work="$RUNTIME/validation"
   mkdir -p "$work"
@@ -270,6 +339,8 @@ validate_once() {
 
 log "Town Steward started (interval=${INTERVAL}s)"
 while true; do
+  reconcile_health_once >>"$LOG" 2>&1 || true
+  reconcile_polecats_once >>"$LOG" 2>&1 || true
   if validate_once >>"$LOG" 2>&1; then
     log "validation pass complete"
   else
@@ -338,12 +409,13 @@ func runStewardStart(cmd *cobra.Command, args []string) error {
 
 Your loop:
 1. Run gt prime.
-2. Check gt hook. If empty, run gt patrol new, then execute the hook it creates.
-3. Follow mol-steward-patrol: scan, classify, reconcile safe findings, verify, validate upgrades, report+loop.
-4. Safe health reconciliation goes through gt steward reconcile-health only.
-5. Never restart production Dolt blindly; collect diagnostics first and escalate.
-6. Never apply upgrades automatically. The human chooses when to run /gt-upgrade.
-7. Prefer mail-first, non-invasive notifications. Do not spam duplicate alerts.`,
+2. Immediately run the deterministic controller script: /home/d3adb0y/gt/scripts/gt-steward-loop.sh
+3. Keep that script running; it scans, safely reconciles health, safely reconciles polecat recovery debt, validates upgrades, reports proposals, and sleeps between cycles.
+4. If the script exits, inspect the error, fix safe local causes, and restart it.
+5. Safe health reconciliation goes through gt steward reconcile-health only.
+6. Never restart production Dolt blindly; collect diagnostics first and escalate.
+7. Never apply upgrades automatically. The human chooses when to run /gt-upgrade.
+8. Prefer mail-first, non-invasive notifications. Do not spam duplicate alerts.`,
 		WaitForAgent: true,
 		WaitFatal:    true,
 		AutoRespawn:  true,
