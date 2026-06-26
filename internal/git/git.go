@@ -2402,11 +2402,16 @@ func (g *Git) StashCount() (int, error) {
 		return 0, nil
 	}
 
-	// Get current branch to filter stashes.
-	// If we can't determine the branch (detached HEAD, error), count all
-	// stashes as a safe fallback — better to over-count than silently lose work.
+	// Get current branch to filter stashes. Detached HEAD worktrees have no
+	// branch-owned stash identity; counting repo-wide stashes there makes every
+	// preserved detached polecat look dirty. Treat detached HEAD as zero
+	// branch-owned stashes and let callers expose repo-wide stashes separately via
+	// StashCountAll for diagnostics.
 	branch, branchErr := g.CurrentBranch()
-	filterByBranch := branchErr == nil && branch != "" && branch != "HEAD"
+	if branchErr != nil || branch == "" || branch == "HEAD" {
+		return 0, nil
+	}
+	filterByBranch := true
 
 	// Stash reflog lines have the format:
 	//   stash@{N}: WIP on <branch>: <hash> <message>
@@ -2592,6 +2597,17 @@ func (g *Git) branchPreservationStatus(localBranch, remote string, targets []str
 	var candidates []string
 	hasEvidence := len(nonEmptyUnique(targets)) > 0
 
+	if includeExactBranch && (localBranch == "" || localBranch == "HEAD") {
+		if containingRef, ok := g.remoteBranchContainingHead(remote); ok {
+			return BranchPreservationStatus{
+				Preserved:             true,
+				ComparisonBase:        containingRef,
+				UnpreservedPatchCount: 0,
+				Evidence:              "containing_remote_branch",
+			}, nil
+		}
+	}
+
 	if includeExactBranch && localBranch != "" && localBranch != "HEAD" {
 		if remoteSHA, err := g.PushRemoteBranchTip(remote, localBranch); err == nil && remoteSHA != "" {
 			hasEvidence = true
@@ -2658,6 +2674,22 @@ func (g *Git) branchPreservationStatus(localBranch, remote string, targets []str
 		return result, lastErr
 	}
 	return result, fmt.Errorf("no usable comparison refs")
+}
+
+func (g *Git) remoteBranchContainingHead(remote string) (string, bool) {
+	out, err := g.run("branch", "-r", "--contains", "HEAD")
+	if err != nil || strings.TrimSpace(out) == "" {
+		return "", false
+	}
+	prefix := remote + "/"
+	for _, line := range strings.Split(out, "\n") {
+		ref := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "*"))
+		if ref == "" || strings.Contains(ref, " -> ") || !strings.HasPrefix(ref, prefix) {
+			continue
+		}
+		return ref, true
+	}
+	return "", false
 }
 
 func isPolecatSelfUpstream(localBranch, remote, upstream string) bool {

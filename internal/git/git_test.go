@@ -1944,8 +1944,9 @@ func TestStashCount_FiltersByBranch(t *testing.T) {
 	}
 }
 
-// TestStashCount_DetachedHEAD verifies that StashCount counts all stashes
-// when in detached HEAD state (cannot determine branch, falls back to counting all).
+// TestStashCount_DetachedHEAD verifies that StashCount reports zero branch-owned
+// stashes when in detached HEAD state. Repo-wide stashes are still available via
+// StashCountAll, but they must not make every detached worktree look dirty.
 func TestStashCount_DetachedHEAD(t *testing.T) {
 	t.Parallel()
 	dir := initTestRepo(t)
@@ -1971,13 +1972,21 @@ func TestStashCount_DetachedHEAD(t *testing.T) {
 		t.Fatalf("git checkout --detach: %v", err)
 	}
 
-	// In detached HEAD, StashCount should count all stashes (safe fallback)
+	// In detached HEAD, StashCount should not count repo-wide stashes as
+	// branch-owned risk for this worktree.
 	count, err := g.StashCount()
 	if err != nil {
 		t.Fatalf("StashCount: %v", err)
 	}
-	if count != 1 {
-		t.Errorf("StashCount in detached HEAD = %d, want 1 (should count all stashes)", count)
+	if count != 0 {
+		t.Errorf("StashCount in detached HEAD = %d, want 0 branch-owned stashes", count)
+	}
+	all, err := g.StashCountAll()
+	if err != nil {
+		t.Fatalf("StashCountAll: %v", err)
+	}
+	if all != 1 {
+		t.Errorf("StashCountAll in detached HEAD = %d, want 1 repo-wide stash", all)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -101,6 +102,28 @@ func TestGetGitStateCountsAheadOfUpstream(t *testing.T) {
 	}
 }
 
+func TestGetGitStateDetachedAtRemoteBranchIsClean(t *testing.T) {
+	repo := setupGitStateRemoteRepo(t)
+	runGitCmd(t, repo, "switch", "integration/test")
+	writeTestFile(t, filepath.Join(repo, "detached.txt"), "detached\n")
+	runGitCmd(t, repo, "add", "detached.txt")
+	runGitCmd(t, repo, "commit", "-m", "detached remote commit")
+	runGitCmd(t, repo, "push", "origin", "integration/test")
+	head := strings.TrimSpace(gitOutput(t, repo, "rev-parse", "HEAD"))
+	runGitCmd(t, repo, "checkout", "--detach", head)
+
+	state, err := getGitState(repo)
+	if err != nil {
+		t.Fatalf("getGitState: %v", err)
+	}
+	if !state.Clean {
+		t.Fatalf("detached HEAD contained by a remote branch should be clean: %+v", state)
+	}
+	if state.UnpushedCommits != 0 {
+		t.Fatalf("UnpushedCommits = %d, want 0", state.UnpushedCommits)
+	}
+}
+
 func TestGetGitStateTreatsPushedSourceBranchAsClean(t *testing.T) {
 	repo := setupGitStateRemoteRepo(t)
 	runGitCmd(t, repo, "switch", "-c", "polecat/pushed")
@@ -182,6 +205,17 @@ func runGitCmd(t *testing.T, dir string, args ...string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v failed: %v\n%s", args, err, out)
 	}
+}
+
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v failed: %v", args, err)
+	}
+	return string(out)
 }
 
 func writeTestFile(t *testing.T, path, content string) {
