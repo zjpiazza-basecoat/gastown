@@ -24,6 +24,7 @@ import (
 // escalations for the same (rig, prefix) pair. Prevents alert spam when a
 // stuck context keeps re-appearing on every dispatch tick.
 const crossRigEscalationDebounce = time.Hour
+const dispatchFailureEscalationDebounce = 30 * time.Minute
 
 // crossRigEscalationState tracks last-escalation timestamps per (rig, prefix).
 // Process-local — debounce resets on daemon restart, which is fine: a new
@@ -31,6 +32,9 @@ const crossRigEscalationDebounce = time.Hour
 var (
 	crossRigEscalationMu   sync.Mutex
 	crossRigEscalationLast = map[string]time.Time{}
+
+	dispatchFailureEscalationMu   sync.Mutex
+	dispatchFailureEscalationLast = map[string]time.Time{}
 )
 
 // crossRigEscalationKey returns the debounce key for a (rig, prefix) pair.
@@ -66,6 +70,28 @@ var fireCrossRigEscalation = func(rig, prefix, beadID string) {
 	cmd := exec.Command("gt", "escalate", "--severity", "medium", "--reason", "cross-rig-prefix", msg)
 	if err := cmd.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "%s cross-rig escalation failed: %v\n", style.Warning.Render("⚠"), err)
+	}
+}
+
+func shouldFireDispatchFailureEscalation(beadID, targetRig string, now time.Time) bool {
+	dispatchFailureEscalationMu.Lock()
+	defer dispatchFailureEscalationMu.Unlock()
+	key := targetRig + "/" + beadID
+	if last, ok := dispatchFailureEscalationLast[key]; ok && now.Sub(last) < dispatchFailureEscalationDebounce {
+		return false
+	}
+	dispatchFailureEscalationLast[key] = now
+	return true
+}
+
+var fireDispatchFailureEscalation = func(b capacity.PendingBead, dispatchErr error) {
+	if !shouldFireDispatchFailureEscalation(b.WorkBeadID, b.TargetRig, time.Now()) {
+		return
+	}
+	msg := fmt.Sprintf("scheduler dispatch failed: bead=%s context=%s rig=%s error=%s", b.WorkBeadID, b.ID, b.TargetRig, dispatchErr)
+	cmd := exec.Command("gt", "escalate", "--severity", "high", "--reason", "scheduler-dispatch-failed", msg)
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "%s dispatch failure escalation failed for %s: %v\n", style.Warning.Render("⚠"), b.WorkBeadID, err)
 	}
 }
 
@@ -218,6 +244,7 @@ func dispatchScheduledWork(townRoot, actor string, batchOverride int, dryRun boo
 			} else {
 				_ = events.LogFeed(events.TypeSchedulerDispatchFailed, actor,
 					events.SchedulerDispatchFailedPayload(b.WorkBeadID, b.TargetRig, err.Error()))
+				fireDispatchFailureEscalation(b, err)
 			}
 			recordDispatchFailure(beadsForPendingContext(townRoot, b), b, err)
 		},
