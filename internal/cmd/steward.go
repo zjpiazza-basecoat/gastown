@@ -595,14 +595,6 @@ func runStewardScan(cmd *cobra.Command, args []string) error {
 			}
 			if status.Capacity.RecoveryBlocked > 0 {
 				report.Findings = append(report.Findings, stewardFinding{Severity: "medium", Kind: "recovery-debt", Summary: "Polecat recovery debt present", Detail: fmt.Sprintf("recovery_blocked=%d", status.Capacity.RecoveryBlocked)})
-				ensureStewardProposal(townRoot, stewardProposal{
-					Kind:           "implementation",
-					Title:          "Add automatic polecat recovery reconciliation",
-					Summary:        fmt.Sprintf("Scheduler reports %d recovery-blocked polecat(s). Steward can propose a safe reconciler for NEEDS_MQ_SUBMIT/NEEDS_RECOVERY states instead of leaving this as manual Mayor work.", status.Capacity.RecoveryBlocked),
-					Details:        "Implement gt steward reconcile-polecats --rig <rig>: classify recovery debt, submit/verify real MRs, safely clear clean detached worktrees, escalate ambiguous branches/stashes, and verify scheduler capacity.",
-					Risk:           "Must not nuke worktrees with unique commits, stashes, or real pending MRs.",
-					ApproveCommand: "gt mail send steward -s 'APPROVED: polecat recovery reconciler' -m 'Human approved implementing gt steward reconcile-polecats. File/implement the smallest safe patch, test, install, and return an upgrade-ready proposal.'",
-				})
 			}
 		}
 	} else {
