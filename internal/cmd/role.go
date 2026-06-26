@@ -30,12 +30,12 @@ type RoleInfo struct {
 	Home          string `json:"home"`
 	Rig           string `json:"rig,omitempty"`
 	Polecat       string `json:"polecat,omitempty"`
-	EnvRole       string `json:"env_role,omitempty"`    // Value of GT_ROLE if set
-	CwdRole       Role   `json:"cwd_role,omitempty"`    // Role detected from cwd
-	Mismatch      bool   `json:"mismatch,omitempty"`    // True if env != cwd detection
+	EnvRole       string `json:"env_role,omitempty"`       // Value of GT_ROLE if set
+	CwdRole       Role   `json:"cwd_role,omitempty"`       // Role detected from cwd
+	Mismatch      bool   `json:"mismatch,omitempty"`       // True if env != cwd detection
 	EnvIncomplete bool   `json:"env_incomplete,omitempty"` // True if env was set but missing rig/polecat, filled from cwd
 	TownRoot      string `json:"town_root,omitempty"`
-	WorkDir       string `json:"work_dir,omitempty"`    // Current working directory
+	WorkDir       string `json:"work_dir,omitempty"` // Current working directory
 }
 
 var roleCmd = &cobra.Command{
@@ -351,6 +351,8 @@ func parseRoleString(s string) (Role, string, string) {
 		return RoleMayor, "", ""
 	case constants.RoleDeacon:
 		return RoleDeacon, "", ""
+	case constants.RoleSteward:
+		return RoleSteward, "", ""
 	case "boot":
 		return RoleBoot, "", ""
 	case "dog":
@@ -405,6 +407,8 @@ func (info RoleInfo) ActorString() string {
 		return "mayor"
 	case RoleDeacon:
 		return "deacon"
+	case RoleSteward:
+		return "steward"
 	case RoleWitness:
 		if info.Rig != "" {
 			return fmt.Sprintf("%s/witness", info.Rig)
@@ -439,6 +443,8 @@ func getRoleHome(role Role, rig, polecat, townRoot string) string {
 		return filepath.Join(townRoot, "mayor")
 	case RoleDeacon:
 		return filepath.Join(townRoot, "deacon")
+	case RoleSteward:
+		return filepath.Join(townRoot, "steward")
 	case RoleWitness:
 		if rig == "" {
 			return ""

@@ -1,0 +1,23 @@
+# Town Steward role definition
+# Town-level reconciliation controller. One per town.
+
+role = "steward"
+scope = "town"
+nudge = "Run 'gt prime' to check steward patrol status and reconcile safe findings."
+prompt_template = "steward.md.tmpl"
+
+[session]
+pattern = "hq-steward"
+work_dir = "{town}/steward"
+needs_pre_sync = false
+start_command = "exec claude --dangerously-skip-permissions"
+
+[env]
+GT_ROLE = "steward"
+GT_SCOPE = "town"
+
+[health]
+ping_timeout = "30s"
+consecutive_failures = 3
+kill_cooldown = "5m"
+stuck_threshold = "1h"

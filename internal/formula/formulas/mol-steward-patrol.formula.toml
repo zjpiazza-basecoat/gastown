@@ -1,0 +1,125 @@
+description = """
+Town Steward reconciliation patrol loop.
+
+The Steward is the town-level reliability role for Gas Town itself. It watches
+systemic health signals, applies safe local reconciliation, and escalates when
+automatic repair is unsafe.
+
+This patrol intentionally mirrors witness/refinery loop shape: scan, classify,
+reconcile, verify, report, await-signal/backoff.
+"""
+formula = "mol-steward-patrol"
+version = 1
+
+[squash]
+trigger = "on_complete"
+template_type = "work"
+include_metrics = true
+
+[[steps]]
+id = "scan"
+title = "Scan system health and drift"
+description = """
+Run the deterministic scan:
+```bash
+gt steward scan
+```
+
+Also run the health report if scan reports health findings:
+```bash
+gt health --json
+```
+
+Record the finding kinds and severities. Do not fix anything in this step.
+"""
+
+[[steps]]
+id = "classify"
+title = "Classify reconciliation safety"
+needs = ["scan"]
+description = """
+Classify findings into:
+
+- **safe-auto**: local cleanup with explicit guardrails, e.g. non-production
+  Dolt sql-server listeners, safe `gt dolt cleanup` without `--force`.
+- **needs-diagnostics**: Dolt production server hangs/outages. Capture SIGQUIT
+  and `gt dolt status` before escalation; do not blind-restart.
+- **platform-gap**: repeated failure showing missing Gas Town capability.
+- **manual-escalation**: destructive or ambiguous action.
+
+If all findings are informational, skip reconcile and proceed to verify.
+"""
+
+[[steps]]
+id = "reconcile"
+title = "Apply safe reconciliation"
+needs = ["classify"]
+description = """
+For safe-auto health findings, run:
+```bash
+gt steward reconcile-health
+```
+
+This command has built-in guardrails:
+- never kills the production Dolt PID/port
+- only terminates non-production Dolt sql-server listeners
+- runs `gt dolt cleanup` without `--force`
+- re-runs `gt health --json` after attempting cleanup
+
+If the command refuses or reports unresolved unhealthy findings, escalate with
+specific evidence instead of improvising.
+"""
+
+[[steps]]
+id = "verify"
+title = "Verify health after reconciliation"
+needs = ["reconcile"]
+description = """
+Verify final state:
+```bash
+gt health --json
+gt steward scan
+```
+
+If health is still unhealthy after safe reconciliation, escalate to Mayor with
+current JSON summary and the actions attempted.
+"""
+
+[[steps]]
+id = "upgrade-check"
+title = "Validate local upgrade candidates"
+needs = ["verify"]
+description = """
+Periodically validate the local Gas Town stack upgrade candidate:
+```bash
+gt steward validate-upgrade
+```
+
+If it is green, the command notifies Mayor once per candidate. If red, only
+escalate when the failure is actionable or repeated.
+"""
+
+[[steps]]
+id = "loop-or-exit"
+title = "Report and loop or hand off"
+needs = ["upgrade-check"]
+description = """
+Resolve the Steward agent bead:
+```bash
+YOUR_AGENT_BEAD=$(gt agents resolve --role steward)
+```
+
+Await activity with backoff:
+```bash
+gt mol step await-signal --agent-bead "$YOUR_AGENT_BEAD" \
+  --backoff-base 1m --backoff-mult 2 --backoff-max 15m
+```
+
+Then report and create the next cycle:
+```bash
+gt patrol report --summary "<brief steward summary>" \
+  --steps "scan:OK,classify:OK,reconcile:OK,verify:OK,upgrade-check:OK,loop-or-exit:OK"
+```
+
+If context is high, use `gt handoff -s "Steward patrol handoff" -m "..."` and exit.
+"""

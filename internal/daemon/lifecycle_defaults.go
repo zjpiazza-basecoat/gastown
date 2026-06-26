@@ -58,6 +58,9 @@ func DefaultLifecycleConfig() *DaemonPatrolConfig {
 				IntervalStr: "30m",
 				TimeoutStr:  "10m",
 			},
+			Steward: &PatrolConfig{
+				Enabled: true,
+			},
 			Handler: &PatrolConfig{
 				Enabled: true,
 			},
@@ -116,6 +119,10 @@ func EnsureLifecycleDefaults(config *DaemonPatrolConfig) bool {
 	}
 	if p.MainBranchTest == nil {
 		p.MainBranchTest = d.MainBranchTest
+		changed = true
+	}
+	if p.Steward == nil {
+		p.Steward = d.Steward
 		changed = true
 	}
 	if p.Handler == nil {

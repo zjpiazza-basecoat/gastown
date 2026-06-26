@@ -285,14 +285,20 @@ func truncateDescription(desc string, maxLen int) string {
 
 // outputMoleculeContext checks if the agent is working on a molecule step and shows progress.
 func outputMoleculeContext(ctx RoleContext) {
-	// Applies to polecats, crew workers, deacon, witness, and refinery
-	if ctx.Role != RolePolecat && ctx.Role != RoleCrew && ctx.Role != RoleDeacon && ctx.Role != RoleWitness && ctx.Role != RoleRefinery {
+	// Applies to polecats, crew workers, deacon, steward, witness, and refinery
+	if ctx.Role != RolePolecat && ctx.Role != RoleCrew && ctx.Role != RoleDeacon && ctx.Role != RoleSteward && ctx.Role != RoleWitness && ctx.Role != RoleRefinery {
 		return
 	}
 
 	// For Deacon, use special patrol molecule handling
 	if ctx.Role == RoleDeacon {
 		outputDeaconPatrolContext(ctx)
+		return
+	}
+
+	// For Steward, use special patrol molecule handling (auto-bonds on startup)
+	if ctx.Role == RoleSteward {
+		outputStewardPatrolContext(ctx)
 		return
 	}
 
@@ -342,6 +348,23 @@ func outputDeaconPatrolContext(ctx RoleContext) {
 
 // outputWitnessPatrolContext shows patrol molecule status for the Witness.
 // Witness AUTO-BONDS its patrol molecule on startup if one isn't already running.
+func outputStewardPatrolContext(ctx RoleContext) {
+	cfg := PatrolConfig{
+		RoleName:      "steward",
+		PatrolMolName: constants.MolStewardPatrol,
+		BeadsDir:      ctx.TownRoot,
+		Assignee:      "steward",
+		HeaderEmoji:   constants.EmojiSteward,
+		HeaderTitle:   "Steward Patrol Status",
+		WorkLoopSteps: []string{
+			"Work through scan → classify → reconcile → verify → report",
+			"At cycle end:\n   - If context LOW:\n     * Report and loop: `" + cli.Name() + " patrol report --summary \"<brief steward summary>\"`\n   - If context HIGH:\n     * Send handoff: `" + cli.Name() + " handoff -s \"Steward patrol\" -m \"<observations>\"`\n     * Exit cleanly (daemon respawns fresh session)",
+		},
+	}
+	outputPatrolContext(cfg)
+	showFormulaSteps(constants.MolStewardPatrol, "Patrol Steps", ctx.TownRoot, ctx.Rig)
+}
+
 func outputWitnessPatrolContext(ctx RoleContext) {
 	if stopped, reason := IsRigParkedOrDocked(ctx.TownRoot, ctx.Rig); stopped {
 		fmt.Printf("\n⏸️  Rig %s is %s — skipping patrol wisp generation.\n", ctx.Rig, reason)

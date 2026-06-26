@@ -53,6 +53,7 @@ type Role string
 const (
 	RoleMayor    Role = "mayor"
 	RoleDeacon   Role = "deacon"
+	RoleSteward  Role = "steward"
 	RoleBoot     Role = "boot"
 	RoleWitness  Role = "witness"
 	RoleRefinery Role = "refinery"

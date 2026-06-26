@@ -919,6 +919,13 @@ func (d *Daemon) heartbeat(state *State) {
 	// 6. Ensure Mayor is running (restart if dead)
 	d.ensureMayorRunning()
 
+	// 6.25. Ensure Town Steward reconciliation loop is running.
+	if d.isPatrolActive(constants.RoleSteward) {
+		d.ensureStewardRunning()
+	} else {
+		d.logger.Printf("Steward patrol disabled in config, skipping")
+	}
+
 	// 6.5. Handle Dog lifecycle: cleanup stuck dogs and dispatch plugins
 	// Pressure-gated: dog dispatch spawns new agent sessions.
 	if d.isPatrolActive("handler") {
@@ -1478,6 +1485,52 @@ func (d *Daemon) ensureDeaconRunning() {
 	d.metrics.recordRestart(d.ctx, "deacon")
 	telemetry.RecordDaemonRestart(d.ctx, "deacon")
 	d.logger.Println("Deacon started successfully")
+}
+
+// ensureStewardRunning ensures the Town Steward reconciliation loop is running.
+func (d *Daemon) ensureStewardRunning() {
+	const agentID = "steward"
+	sessionID := session.StewardSessionName()
+
+	if d.restartTracker != nil {
+		if d.restartTracker.IsInCrashLoop(agentID) {
+			d.logger.Printf("Steward is in crash loop, skipping restart (use 'gt daemon clear-backoff steward' to reset)")
+			return
+		}
+		if !d.restartTracker.CanRestart(agentID) {
+			remaining := d.restartTracker.GetBackoffRemaining(agentID)
+			d.logger.Printf("Steward restart in backoff, %s remaining", remaining.Round(time.Second))
+			return
+		}
+	}
+
+	running, _ := d.tmux.HasSession(sessionID)
+	if running && d.tmux.IsAgentAlive(sessionID) {
+		if d.restartTracker != nil {
+			d.restartTracker.RecordSuccess(agentID)
+		}
+		return
+	}
+	if running {
+		_ = d.tmux.KillSessionWithProcesses(sessionID)
+	}
+
+	cmd := exec.Command(d.gtPath, "steward", "start")
+	cmd.Dir = d.config.TownRoot
+	if output, err := cmd.CombinedOutput(); err != nil {
+		d.logger.Printf("Error starting Steward: %v: %s", err, strings.TrimSpace(string(output)))
+		return
+	}
+
+	if d.restartTracker != nil {
+		d.restartTracker.RecordRestart(agentID)
+		if err := d.restartTracker.Save(); err != nil {
+			d.logger.Printf("Warning: failed to save restart state: %v", err)
+		}
+	}
+	d.metrics.recordRestart(d.ctx, "steward")
+	telemetry.RecordDaemonRestart(d.ctx, "steward")
+	d.logger.Println("Steward started successfully")
 }
 
 // deaconGracePeriod returns the config-driven deacon grace period.

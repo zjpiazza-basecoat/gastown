@@ -9,11 +9,14 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/constants"
+	"github.com/steveyegge/gastown/internal/doltserver"
+	"github.com/steveyegge/gastown/internal/health"
 	"github.com/steveyegge/gastown/internal/session"
 	"github.com/steveyegge/gastown/internal/style"
 	"github.com/steveyegge/gastown/internal/tmux"
@@ -76,6 +79,20 @@ classify before notifying or patching.`,
 	RunE: runStewardScan,
 }
 
+var stewardReconcileHealthCmd = &cobra.Command{
+	Use:   "reconcile-health",
+	Short: "Safely reconcile gt health findings",
+	Long: `Safely reconcile gt health findings with production guardrails.
+
+Actions:
+  - terminate Dolt sql-server listeners that are NOT the production port/PID
+  - run gt dolt cleanup without --force for safe orphan DB cleanup
+  - rerun gt health --json for verification
+
+This command deliberately refuses destructive or ambiguous repair.`,
+	RunE: runStewardReconcileHealth,
+}
+
 var stewardValidateUpgradeCmd = &cobra.Command{
 	Use:   "validate-upgrade",
 	Short: "Validate local Gas Town upgrade candidate once",
@@ -97,6 +114,7 @@ func init() {
 	stewardCmd.AddCommand(stewardStatusCmd)
 	stewardCmd.AddCommand(stewardAttachCmd)
 	stewardCmd.AddCommand(stewardScanCmd)
+	stewardCmd.AddCommand(stewardReconcileHealthCmd)
 	stewardCmd.AddCommand(stewardValidateUpgradeCmd)
 	rootCmd.AddCommand(stewardCmd)
 }
@@ -237,10 +255,10 @@ func runStewardStart(cmd *cobra.Command, args []string) error {
 
 Your loop:
 1. Run gt prime.
-2. Periodically run: gt steward scan and gt steward validate-upgrade.
-3. Use scan findings to classify: config/steering vs operational cleanup vs platform gap.
-4. If validation is green, ensure Mayor/user has mail saying /gt-upgrade is available.
-5. If validation is red, file or escalate only when actionable.
+2. Check gt hook. If empty, run gt patrol new, then execute the hook it creates.
+3. Follow mol-steward-patrol: scan, classify, reconcile safe findings, verify, validate upgrades, report+loop.
+4. Safe health reconciliation goes through gt steward reconcile-health only.
+5. Never restart production Dolt blindly; collect diagnostics first and escalate.
 6. Never apply upgrades automatically. The human chooses when to run /gt-upgrade.
 7. Prefer mail-first, non-invasive notifications. Do not spam duplicate alerts.`,
 		WaitForAgent: true,
@@ -333,6 +351,23 @@ type polecatListItem struct {
 	Reusable bool   `json:"reusable"`
 }
 
+type stewardGTHealth struct {
+	Server struct {
+		Running bool  `json:"running"`
+		PID     int   `json:"pid"`
+		Port    int   `json:"port"`
+		Latency int64 `json:"latency_ms"`
+	} `json:"server"`
+	Processes struct {
+		ZombieCount int   `json:"zombie_count"`
+		ZombiePIDs  []int `json:"zombie_pids"`
+	} `json:"processes"`
+	Orphans []struct {
+		Name string `json:"name"`
+		Size string `json:"size"`
+	} `json:"orphans"`
+}
+
 func runStewardScan(cmd *cobra.Command, args []string) error {
 	townRoot, err := workspace.FindFromCwdOrError()
 	if err != nil {
@@ -340,6 +375,27 @@ func runStewardScan(cmd *cobra.Command, args []string) error {
 	}
 	report := stewardScanReport{}
 	metric := stewardHealthMetric{Timestamp: time.Now().UTC(), FindingsBySeverity: map[string]int{}, FindingsByKind: map[string]int{}}
+
+	if out, err := runStewardCapture(townRoot, "gt", "health", "--json"); err == nil {
+		var h stewardGTHealth
+		if json.Unmarshal(out, &h) == nil {
+			if !h.Server.Running {
+				report.Findings = append(report.Findings, stewardFinding{Severity: "critical", Kind: "dolt-server-down", Summary: "Production Dolt server is not running"})
+			}
+			if h.Processes.ZombieCount > 0 {
+				report.Findings = append(report.Findings, stewardFinding{Severity: "high", Kind: "dolt-zombie-listeners", Summary: "Non-production Dolt sql-server listeners present", Detail: fmt.Sprintf("pids=%v", h.Processes.ZombiePIDs)})
+			}
+			if len(h.Orphans) > 0 {
+				var names []string
+				for _, o := range h.Orphans {
+					names = append(names, o.Name)
+				}
+				report.Findings = append(report.Findings, stewardFinding{Severity: "medium", Kind: "orphan-databases", Summary: "Orphan Dolt databases present", Detail: strings.Join(names, ", ")})
+			}
+		}
+	} else {
+		report.Findings = append(report.Findings, stewardFinding{Severity: "high", Kind: "gt-health-unavailable", Summary: "Could not read gt health", Detail: err.Error()})
+	}
 
 	if out, err := runStewardCapture(townRoot, "gt", "scheduler", "status", "--json"); err == nil {
 		var status stewardSchedulerStatus
@@ -440,6 +496,73 @@ func runStewardCapture(townRoot string, name string, args ...string) ([]byte, er
 	c := exec.Command(name, args...)
 	c.Dir = townRoot
 	return c.Output()
+}
+
+func runStewardReconcileHealth(cmd *cobra.Command, args []string) error {
+	townRoot, err := workspace.FindFromCwdOrError()
+	if err != nil {
+		return fmt.Errorf("not in a Gas Town workspace: %w", err)
+	}
+
+	state, err := doltserver.LoadState(townRoot)
+	if err != nil {
+		return fmt.Errorf("loading production Dolt state: %w", err)
+	}
+	prodPort := state.Port
+	prodPID := 0
+	if running, pid, err := doltserver.IsRunning(townRoot); err == nil && running {
+		prodPID = pid
+	}
+
+	zombies := health.FindZombieServers([]int{prodPort})
+	for _, pid := range zombies.PIDs {
+		if pid == 0 || pid == prodPID {
+			fmt.Printf("skip pid %d (production or invalid)\n", pid)
+			continue
+		}
+		proc, err := os.FindProcess(pid)
+		if err != nil {
+			fmt.Printf("skip pid %d: %v\n", pid, err)
+			continue
+		}
+		fmt.Printf("terminating non-production Dolt sql-server pid %d\n", pid)
+		_ = proc.Signal(syscall.SIGTERM)
+	}
+
+	if zombies.Count > 0 {
+		time.Sleep(2 * time.Second)
+		remaining := health.FindZombieServers([]int{prodPort})
+		for _, pid := range remaining.PIDs {
+			if pid == 0 || pid == prodPID {
+				continue
+			}
+			proc, err := os.FindProcess(pid)
+			if err != nil {
+				continue
+			}
+			fmt.Printf("force-killing non-production Dolt sql-server pid %d\n", pid)
+			_ = proc.Signal(syscall.SIGKILL)
+		}
+	}
+
+	fmt.Println("running safe orphan cleanup (no --force)")
+	cleanup := exec.Command("gt", "dolt", "cleanup")
+	cleanup.Dir = townRoot
+	cleanup.Stdout = os.Stdout
+	cleanup.Stderr = os.Stderr
+	if err := cleanup.Run(); err != nil {
+		fmt.Printf("safe orphan cleanup did not fully complete: %v\n", err)
+	}
+
+	fmt.Println("verification: gt health --json")
+	verify := exec.Command("gt", "health", "--json")
+	verify.Dir = townRoot
+	verify.Stdout = os.Stdout
+	verify.Stderr = os.Stderr
+	if err := verify.Run(); err != nil {
+		return fmt.Errorf("verifying health: %w", err)
+	}
+	return nil
 }
 
 func runStewardValidateUpgrade(cmd *cobra.Command, args []string) error {

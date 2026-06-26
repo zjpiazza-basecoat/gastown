@@ -62,6 +62,13 @@ func runPatrolReport(cmd *cobra.Command, args []string) error {
 			BeadsDir:      roleInfo.TownRoot,
 			Assignee:      "deacon",
 		}
+	case RoleSteward:
+		cfg = PatrolConfig{
+			RoleName:      "steward",
+			PatrolMolName: constants.MolStewardPatrol,
+			BeadsDir:      roleInfo.TownRoot,
+			Assignee:      "steward",
+		}
 	case RoleWitness:
 		cfg = PatrolConfig{
 			RoleName:      "witness",

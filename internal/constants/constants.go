@@ -302,6 +302,9 @@ const (
 	// MolRefineryPatrol is the refinery patrol formula name.
 	MolRefineryPatrol = "mol-refinery-patrol"
 
+	// MolStewardPatrol is the town steward reconciliation patrol formula name.
+	MolStewardPatrol = "mol-steward-patrol"
+
 	// MolDogReaper is the wisp reaper dog formula name.
 	MolDogReaper = "mol-dog-reaper"
 
@@ -329,7 +332,7 @@ const (
 
 // PatrolFormulas returns the list of patrol formula names.
 func PatrolFormulas() []string {
-	return []string{MolDeaconPatrol, MolWitnessPatrol, MolRefineryPatrol}
+	return []string{MolDeaconPatrol, MolWitnessPatrol, MolRefineryPatrol, MolStewardPatrol}
 }
 
 // RoleEmoji returns the emoji for a given role name.
