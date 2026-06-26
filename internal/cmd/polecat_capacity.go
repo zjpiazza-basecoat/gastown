@@ -282,8 +282,11 @@ func applyAgentFieldsToCapacitySnapshot(snapshot *polecatCapacitySnapshot, rigPa
 }
 
 func applyCanonicalCapacitySnapshot(snapshot *polecatCapacitySnapshot, rigPath, rigName, polecatName string, fields *beads.AgentFields, tmuxClient *tmux.Tmux) bool {
-	if snapshot == nil || fields == nil || rigPath == "" {
+	if snapshot == nil || fields == nil {
 		return false
+	}
+	if rigPath == "" {
+		return applyAgentFieldsCapacityFallback(snapshot, fields)
 	}
 	state := polecat.State(strings.TrimSpace(fields.AgentState))
 	if state == "" || state == "nuked" {
@@ -300,6 +303,21 @@ func applyCanonicalCapacitySnapshot(snapshot *polecatCapacitySnapshot, rigPath, 
 	disposition := mgr.WorkstateDispositionForPolecat(polecatName, state, issueID)
 	applyWorkstateDispositionToCapacitySnapshot(snapshot, state, disposition)
 	return true
+}
+
+func applyAgentFieldsCapacityFallback(snapshot *polecatCapacitySnapshot, fields *beads.AgentFields) bool {
+	if snapshot == nil || fields == nil {
+		return false
+	}
+	if fields.ActiveMR != "" {
+		snapshot.PendingMR++
+		return true
+	}
+	if strings.TrimSpace(fields.CleanupStatus) == "clean" && !fields.PushFailed && !fields.MRFailed {
+		snapshot.ReusableIdle++
+		return true
+	}
+	return false
 }
 
 func applyWorkstateDispositionToCapacitySnapshot(snapshot *polecatCapacitySnapshot, state polecat.State, disposition polecat.WorkstateDisposition) {
