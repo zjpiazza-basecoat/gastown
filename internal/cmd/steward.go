@@ -144,6 +144,12 @@ var stewardProposalRejectCmd = &cobra.Command{
 	RunE:  runStewardProposalReject,
 }
 
+var stewardProposalProcessApprovedCmd = &cobra.Command{
+	Use:   "process-approved",
+	Short: "Execute approved Steward proposals and mark them completed",
+	RunE:  runStewardProposalProcessApproved,
+}
+
 var stewardValidateUpgradeCmd = &cobra.Command{
 	Use:   "validate-upgrade",
 	Short: "Validate local Gas Town upgrade candidate once",
@@ -192,7 +198,7 @@ func init() {
 	stewardProposalCreateCmd.Flags().StringVar(&stewardProposalApproveCommand, "approve-command", "", "Command to run on approval")
 	stewardProposalCreateCmd.Flags().StringVar(&stewardProposalRejectCommand, "reject-command", "", "Command to run on rejection")
 	_ = stewardProposalCreateCmd.MarkFlagRequired("title")
-	stewardProposalCmd.AddCommand(stewardProposalListCmd, stewardProposalCreateCmd, stewardProposalApproveCmd, stewardProposalRejectCmd)
+	stewardProposalCmd.AddCommand(stewardProposalListCmd, stewardProposalCreateCmd, stewardProposalApproveCmd, stewardProposalRejectCmd, stewardProposalProcessApprovedCmd)
 	stewardCmd.AddCommand(stewardProposalCmd)
 	stewardCmd.AddCommand(stewardValidateUpgradeCmd)
 	rootCmd.AddCommand(stewardCmd)
@@ -214,6 +220,11 @@ INTERVAL="${GT_STEWARD_INTERVAL:-1800}"
 STATE="$RUNTIME/state"
 LOG="$RUNTIME/steward.log"
 mkdir -p "$RUNTIME" "$STATE"
+exec 9>"$RUNTIME/loop.lock"
+if ! flock -n 9; then
+  printf '[%s] Town Steward loop already running; exiting duplicate\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  exit 0
+fi
 
 log() { printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 
@@ -268,7 +279,13 @@ PY
     --title "Gas Town health still unhealthy after safe reconciliation" \
     --summary "Steward safe health reconciliation ran, but gt health still reports findings that require manual review." \
     --details "$details" \
-    --risk "Manual cleanup may be destructive; inspect the health JSON before approving any force cleanup or process changes." || true
+    --risk "Approval runs gt dolt cleanup --force, which removes orphan databases that safe cleanup refused." \
+    --approve-command "gt dolt cleanup --force && gt steward reconcile-health" || true
+}
+
+process_approved_proposals_once() {
+  log "processing approved proposals"
+  timeout 180 /home/d3adb0y/.local/bin/gt steward proposal process-approved >>"$LOG" 2>&1 || log "proposal processing timed out/failed; continuing"
 }
 
 reconcile_health_once() {
@@ -339,6 +356,7 @@ validate_once() {
 
 log "Town Steward started (interval=${INTERVAL}s)"
 while true; do
+  process_approved_proposals_once >>"$LOG" 2>&1 || true
   reconcile_health_once >>"$LOG" 2>&1 || true
   reconcile_polecats_once >>"$LOG" 2>&1 || true
   if validate_once >>"$LOG" 2>&1; then
@@ -1142,6 +1160,55 @@ func updateStewardProposal(id, status string, approve bool) error {
 		return nil
 	}
 	return fmt.Errorf("proposal %s not found", id)
+}
+
+func runStewardProposalProcessApproved(cmd *cobra.Command, args []string) error {
+	townRoot, err := workspace.FindFromCwdOrError()
+	if err != nil {
+		return fmt.Errorf("not in a Gas Town workspace: %w", err)
+	}
+	proposals, err := loadStewardProposals(townRoot)
+	if err != nil {
+		return err
+	}
+	processed := 0
+	now := time.Now().UTC()
+	for i := range proposals {
+		if proposals[i].Status != "approved" {
+			continue
+		}
+		command := strings.TrimSpace(proposals[i].ApproveCommand)
+		if command == "" && proposals[i].Kind == "health" && strings.Contains(proposals[i].Title, "health still unhealthy") {
+			command = "gt dolt cleanup --force && gt steward reconcile-health"
+		}
+		if command == "" {
+			fmt.Printf("proposal %s approved but has no command; marking completed\n", proposals[i].ID)
+			proposals[i].Status = "completed"
+			proposals[i].UpdatedAt = now
+			processed++
+			continue
+		}
+		fmt.Printf("executing approved proposal %s: %s\n", proposals[i].ID, proposals[i].Title)
+		run := exec.Command("/bin/sh", "-lc", command)
+		run.Dir = townRoot
+		run.Stdout = os.Stdout
+		run.Stderr = os.Stderr
+		if err := run.Run(); err != nil {
+			proposals[i].Status = "failed"
+			proposals[i].UpdatedAt = now
+			_ = saveStewardProposals(townRoot, proposals)
+			return fmt.Errorf("running approved proposal %s: %w", proposals[i].ID, err)
+		}
+		proposals[i].Status = "completed"
+		proposals[i].UpdatedAt = now
+		processed++
+	}
+	if processed == 0 {
+		fmt.Println("No approved Steward proposals to process")
+	} else if err := saveStewardProposals(townRoot, proposals); err != nil {
+		return err
+	}
+	return nil
 }
 
 func runStewardValidateUpgrade(cmd *cobra.Command, args []string) error {
