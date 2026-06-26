@@ -93,6 +93,24 @@ This command deliberately refuses destructive or ambiguous repair.`,
 	RunE: runStewardReconcileHealth,
 }
 
+var stewardReconcilePolecatsCmd = &cobra.Command{
+	Use:   "reconcile-polecats",
+	Short: "Safely reconcile recovery-blocked polecats",
+	Long: `Safely reconcile recovery-blocked polecats.
+
+Actions:
+  - inspect idle polecats in NEEDS_MQ_SUBMIT/NEEDS_RECOVERY states
+  - refresh stale cleanup state with gt polecat check-recovery --reconcile-cleanup
+  - submit clean, named work branches to the merge queue with --no-cleanup
+  - refuse ambiguous cases such as running sessions, HEAD branches, dirty worktrees,
+    stashes, or branches whose issue cannot be inferred by gt mq submit
+  - rerun scheduler status after reconciliation
+
+This command is intentionally conservative. It does not nuke worktrees and does
+not force-push, reset, stash, or delete branches.`,
+	RunE: runStewardReconcilePolecats,
+}
+
 var stewardProposalCmd = &cobra.Command{
 	Use:     "proposal",
 	Aliases: []string{"proposals"},
@@ -138,6 +156,9 @@ apply upgrades. On a green candidate, it sends Mayor mail telling the human that
 }
 
 var stewardInterval string
+var stewardReconcilePolecatsRig string
+var stewardReconcilePolecatsDryRun bool
+var stewardReconcilePolecatsLimit int
 var stewardProposalJSON bool
 var stewardProposalPending bool
 var stewardProposalKind string
@@ -150,6 +171,9 @@ var stewardProposalRisk string
 
 func init() {
 	stewardStartCmd.Flags().StringVar(&stewardInterval, "interval", "1800", "Validation interval in seconds")
+	stewardReconcilePolecatsCmd.Flags().StringVar(&stewardReconcilePolecatsRig, "rig", "app", "Rig to reconcile")
+	stewardReconcilePolecatsCmd.Flags().BoolVar(&stewardReconcilePolecatsDryRun, "dry-run", false, "Print planned actions without changing state")
+	stewardReconcilePolecatsCmd.Flags().IntVar(&stewardReconcilePolecatsLimit, "limit", 0, "Maximum number of polecats to reconcile (0 = no limit)")
 	stewardCmd.AddCommand(stewardStartCmd)
 	stewardCmd.AddCommand(stewardStopCmd)
 	stewardCmd.AddCommand(stewardRestartCmd)
@@ -157,6 +181,7 @@ func init() {
 	stewardCmd.AddCommand(stewardAttachCmd)
 	stewardCmd.AddCommand(stewardScanCmd)
 	stewardCmd.AddCommand(stewardReconcileHealthCmd)
+	stewardCmd.AddCommand(stewardReconcilePolecatsCmd)
 	stewardProposalListCmd.Flags().BoolVar(&stewardProposalJSON, "json", false, "Output JSON")
 	stewardProposalListCmd.Flags().BoolVar(&stewardProposalPending, "pending", false, "Only pending proposals")
 	stewardProposalCreateCmd.Flags().StringVar(&stewardProposalKind, "kind", "implementation", "Proposal kind (implementation, upgrade)")
@@ -403,10 +428,21 @@ type stewardSchedulerStatus struct {
 }
 
 type polecatListItem struct {
-	Rig      string `json:"rig"`
-	Verdict  string `json:"verdict"`
-	Reason   string `json:"reason"`
-	Reusable bool   `json:"reusable"`
+	Rig              string `json:"rig"`
+	Name             string `json:"name"`
+	State            string `json:"state"`
+	CleanupStatus    string `json:"cleanup_status"`
+	ActiveMR         string `json:"active_mr"`
+	Branch           string `json:"branch"`
+	Verdict          string `json:"verdict"`
+	Reason           string `json:"reason"`
+	Reusable         bool   `json:"reusable"`
+	SafeToNuke       bool   `json:"safe_to_nuke"`
+	NeedsRecovery    bool   `json:"needs_recovery"`
+	NeedsMQSubmit    bool   `json:"needs_mq_submit"`
+	MQStatus         string `json:"mq_status"`
+	SessionRunning   bool   `json:"session_running"`
+	CountsToCapacity bool   `json:"counts_toward_capacity"`
 }
 
 type stewardGTHealth struct {
@@ -627,6 +663,208 @@ func runStewardReconcileHealth(cmd *cobra.Command, args []string) error {
 	verify.Stderr = os.Stderr
 	if err := verify.Run(); err != nil {
 		return fmt.Errorf("verifying health: %w", err)
+	}
+	return nil
+}
+
+type stewardReconcilePolecatsReport struct {
+	Rig       string                           `json:"rig"`
+	DryRun    bool                             `json:"dry_run"`
+	Examined  int                              `json:"examined"`
+	Changed   int                              `json:"changed"`
+	Submitted int                              `json:"submitted"`
+	Skipped   int                              `json:"skipped"`
+	Items     []stewardReconcilePolecatOutcome `json:"items"`
+}
+
+type stewardReconcilePolecatOutcome struct {
+	Polecat string `json:"polecat"`
+	Verdict string `json:"verdict"`
+	Action  string `json:"action"`
+	Detail  string `json:"detail,omitempty"`
+}
+
+type stewardPolecatGitState struct {
+	Clean                 bool     `json:"clean"`
+	UncommittedFiles      []string `json:"uncommitted_files"`
+	UnpushedCommits       int      `json:"unpushed_commits"`
+	UnpreservedPatchCount int      `json:"unpreserved_patch_count"`
+	StashCount            int      `json:"stash_count"`
+	SharedStashCount      int      `json:"shared_stash_count"`
+}
+
+func runStewardReconcilePolecats(cmd *cobra.Command, args []string) error {
+	townRoot, err := workspace.FindFromCwdOrError()
+	if err != nil {
+		return fmt.Errorf("not in a Gas Town workspace: %w", err)
+	}
+	rigName := strings.TrimSpace(stewardReconcilePolecatsRig)
+	if rigName == "" {
+		return fmt.Errorf("--rig is required")
+	}
+
+	items, err := stewardListPolecats(townRoot, rigName)
+	if err != nil {
+		return err
+	}
+	report := stewardReconcilePolecatsReport{Rig: rigName, DryRun: stewardReconcilePolecatsDryRun}
+	for _, item := range items {
+		if item.Rig != rigName || item.Reusable || (!item.NeedsRecovery && !item.NeedsMQSubmit) {
+			continue
+		}
+		if stewardReconcilePolecatsLimit > 0 && report.Examined >= stewardReconcilePolecatsLimit {
+			break
+		}
+		report.Examined++
+		outcome := stewardReconcileOnePolecat(townRoot, item)
+		report.Items = append(report.Items, outcome)
+		switch outcome.Action {
+		case "refreshed", "submitted":
+			report.Changed++
+			if outcome.Action == "submitted" {
+				report.Submitted++
+			}
+		default:
+			report.Skipped++
+		}
+	}
+
+	fmt.Println("verification: gt scheduler status --json")
+	verify := exec.Command("gt", "scheduler", "status", "--json")
+	verify.Dir = townRoot
+	verify.Stdout = os.Stdout
+	verify.Stderr = os.Stderr
+	if err := verify.Run(); err != nil {
+		return fmt.Errorf("verifying scheduler status: %w", err)
+	}
+
+	data, _ := json.MarshalIndent(report, "", "  ")
+	fmt.Println(string(data))
+	return nil
+}
+
+func stewardListPolecats(townRoot, rigName string) ([]polecatListItem, error) {
+	out, err := runStewardCapture(townRoot, "gt", "polecat", "list", rigName, "--all", "--json")
+	if err != nil {
+		return nil, fmt.Errorf("listing polecats for %s: %w", rigName, err)
+	}
+	var items []polecatListItem
+	if err := json.Unmarshal(out, &items); err != nil {
+		return nil, fmt.Errorf("parsing polecat list: %w", err)
+	}
+	return items, nil
+}
+
+func stewardReconcileOnePolecat(townRoot string, item polecatListItem) stewardReconcilePolecatOutcome {
+	addr := item.Rig + "/" + item.Name
+	outcome := stewardReconcilePolecatOutcome{Polecat: addr, Verdict: item.Verdict}
+	if item.SessionRunning || item.State == "working" {
+		outcome.Action = "skipped"
+		outcome.Detail = "session is running"
+		return outcome
+	}
+
+	refreshed, err := stewardCheckRecovery(townRoot, addr, !stewardReconcilePolecatsDryRun)
+	if err != nil {
+		outcome.Action = "skipped"
+		outcome.Detail = "check-recovery failed: " + err.Error()
+		return outcome
+	}
+	if refreshed.Reusable || refreshed.SafeToNuke || !refreshed.NeedsRecovery {
+		if stewardReconcilePolecatsDryRun {
+			outcome.Action = "dry-run"
+			outcome.Detail = fmt.Sprintf("would refresh stale state; check-recovery reports %s (%s)", refreshed.Verdict, refreshed.Reason)
+			return outcome
+		}
+		outcome.Action = "refreshed"
+		outcome.Detail = fmt.Sprintf("check-recovery now reports %s (%s)", refreshed.Verdict, refreshed.Reason)
+		return outcome
+	}
+	if !refreshed.NeedsMQSubmit {
+		outcome.Action = "skipped"
+		outcome.Detail = fmt.Sprintf("manual recovery required: %s (%s)", refreshed.Verdict, refreshed.Reason)
+		return outcome
+	}
+	if refreshed.Branch == "" || refreshed.Branch == "HEAD" {
+		outcome.Action = "skipped"
+		outcome.Detail = "needs MQ submit but branch is ambiguous: " + refreshed.Branch
+		return outcome
+	}
+
+	gitState, err := stewardPolecatGitStateFor(townRoot, addr)
+	if err != nil {
+		outcome.Action = "skipped"
+		outcome.Detail = "git-state failed: " + err.Error()
+		return outcome
+	}
+	if !gitState.Clean || gitState.StashCount > 0 || len(gitState.UncommittedFiles) > 0 {
+		outcome.Action = "skipped"
+		outcome.Detail = fmt.Sprintf("dirty worktree: clean=%v uncommitted=%d unpushed=%d stash=%d", gitState.Clean, len(gitState.UncommittedFiles), gitState.UnpushedCommits, gitState.StashCount)
+		return outcome
+	}
+
+	if stewardReconcilePolecatsDryRun {
+		outcome.Action = "dry-run"
+		outcome.Detail = "would submit branch " + refreshed.Branch + " to merge queue"
+		return outcome
+	}
+
+	if err := stewardSubmitPolecatBranch(townRoot, item.Rig, refreshed.Branch); err != nil {
+		outcome.Action = "skipped"
+		outcome.Detail = "mq submit failed: " + err.Error()
+		return outcome
+	}
+	after, err := stewardCheckRecovery(townRoot, addr, true)
+	if err != nil {
+		outcome.Action = "submitted"
+		outcome.Detail = "submitted branch " + refreshed.Branch + "; post-check failed: " + err.Error()
+		return outcome
+	}
+	outcome.Action = "submitted"
+	outcome.Detail = fmt.Sprintf("submitted branch %s; post-check %s (%s)", refreshed.Branch, after.Verdict, after.Reason)
+	return outcome
+}
+
+func stewardCheckRecovery(townRoot, addr string, reconcileCleanup bool) (*RecoveryStatus, error) {
+	args := []string{"polecat", "check-recovery", addr, "--json"}
+	if reconcileCleanup {
+		args = append(args, "--reconcile-cleanup")
+	}
+	out, err := runStewardCapture(townRoot, "gt", args...)
+	if err != nil {
+		return nil, err
+	}
+	var status RecoveryStatus
+	if err := json.Unmarshal(out, &status); err != nil {
+		return nil, err
+	}
+	return &status, nil
+}
+
+func stewardPolecatGitStateFor(townRoot, addr string) (*stewardPolecatGitState, error) {
+	out, err := runStewardCapture(townRoot, "gt", "polecat", "git-state", addr, "--json")
+	if err != nil {
+		return nil, err
+	}
+	var state stewardPolecatGitState
+	if err := json.Unmarshal(out, &state); err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+func stewardSubmitPolecatBranch(townRoot, rigName, branch string) error {
+	rigPath := filepath.Join(townRoot, rigName)
+	cmd := exec.Command("gt", "mq", "submit", "--branch", branch, "--no-cleanup")
+	cmd.Dir = rigPath
+	var stderr bytes.Buffer
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	if s := strings.TrimSpace(stderr.String()); s != "" {
+		fmt.Fprintln(os.Stderr, s)
 	}
 	return nil
 }
