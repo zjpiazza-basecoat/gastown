@@ -70,6 +70,27 @@ func effectivePolecatDirCap(configured int) int {
 	return configured
 }
 
+func freeOneReusablePolecatDirForSpawn(mgr *polecat.Manager) (bool, string, error) {
+	polecats, err := mgr.List()
+	if err != nil {
+		return false, "", err
+	}
+	for _, p := range polecats {
+		if p == nil || p.State != polecat.StateIdle {
+			continue
+		}
+		disposition := mgr.WorkstateDispositionForPolecat(p.Name, p.State, p.Issue)
+		if !disposition.Reusable || !disposition.SafeToNuke || disposition.NeedsRecovery || disposition.NeedsMQSubmit {
+			continue
+		}
+		if err := mgr.Remove(p.Name, false); err != nil {
+			return false, p.Name, err
+		}
+		return true, p.Name, nil
+	}
+	return false, "", nil
+}
+
 // SpawnPolecatForSling creates a fresh polecat and optionally starts its session.
 // This is used by gt sling when the target is a rig name.
 // The caller (sling) handles hook attachment and nudging.
@@ -254,9 +275,15 @@ func SpawnPolecatForSling(rigName string, opts SlingSpawnOptions) (*SpawnedPolec
 			}
 		}
 		if dirCount >= maxPolecatDirsPerRig {
-			return nil, fmt.Errorf("rig %s has %d polecat directories (max %d). "+
-				"Resolve recovery-needed polecats before allocating more slots: gt polecat list %s",
-				rigName, dirCount, maxPolecatDirsPerRig, rigName)
+			if freed, freedName, freeErr := freeOneReusablePolecatDirForSpawn(polecatMgr); freeErr != nil {
+				fmt.Printf("  %s Could not free reusable polecat dir at cap: %v\n", style.Warning.Render("⚠"), freeErr)
+			} else if freed {
+				fmt.Printf("  %s Freed reusable idle polecat %s to make room under dir cap\n", style.Dim.Render("○"), freedName)
+			} else {
+				return nil, fmt.Errorf("rig %s has %d polecat directories (max %d). "+
+					"Resolve recovery-needed polecats before allocating more slots: gt polecat list %s",
+					rigName, dirCount, maxPolecatDirsPerRig, rigName)
+			}
 		}
 	}
 
