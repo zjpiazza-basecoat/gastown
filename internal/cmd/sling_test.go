@@ -4120,3 +4120,19 @@ func TestResolveTargetSelfSlingByPane(t *testing.T) {
 		}
 	})
 }
+
+func TestStandaloneFormulaVarsAddsFeatureAndIssueDefaults(t *testing.T) {
+	got := standaloneFormulaVars("mol-convoy-feed", "deacon/dogs", []string{"convoy=hq-cv-test"})
+	want := []string{"convoy=hq-cv-test", "feature=mol-convoy-feed → deacon/dogs", "issue=mol-convoy-feed"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("standaloneFormulaVars = %#v, want %#v", got, want)
+	}
+}
+
+func TestStandaloneFormulaVarsPreservesExplicitFeatureAndIssue(t *testing.T) {
+	got := standaloneFormulaVars("mol-convoy-feed", "deacon/dogs", []string{"feature=custom", "issue=hq-123", "convoy=hq-cv-test"})
+	want := []string{"feature=custom", "issue=hq-123", "convoy=hq-cv-test"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("standaloneFormulaVars = %#v, want %#v", got, want)
+	}
+}

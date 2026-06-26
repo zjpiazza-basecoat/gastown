@@ -269,6 +269,28 @@ func verifyFormulaExists(formulaName string) error {
 	return fmt.Errorf("formula '%s' not found (check 'bd formula list')", formulaName)
 }
 
+func standaloneFormulaVars(formulaName, targetAgent string, vars []string) []string {
+	seen := make(map[string]bool, len(vars)+2)
+	for _, variable := range vars {
+		if eq := strings.Index(variable, "="); eq > 0 {
+			seen[variable[:eq]] = true
+		}
+	}
+
+	out := append([]string(nil), vars...)
+	if !seen["feature"] {
+		display := formulaName
+		if targetAgent != "" {
+			display = fmt.Sprintf("%s → %s", formulaName, targetAgent)
+		}
+		out = append(out, "feature="+display)
+	}
+	if !seen["issue"] {
+		out = append(out, "issue="+formulaName)
+	}
+	return ensureFormulaRequiredVars(formulaName, out)
+}
+
 // runSlingFormula handles standalone formula slinging.
 // Flow: cook → wisp → attach to hook → nudge
 func runSlingFormula(ctx context.Context, args []string) (err error) {
@@ -359,7 +381,7 @@ func runSlingFormula(ctx context.Context, args []string) (err error) {
 
 		fmt.Printf("Would cook formula: %s\n", formulaName)
 		fmt.Printf("Would create wisp and pin to: %s\n", targetAgent)
-		for _, v := range slingVars {
+		for _, v := range standaloneFormulaVars(formulaName, targetAgent, slingVars) {
 			fmt.Printf("  --var %s\n", v)
 		}
 		fmt.Printf("Would nudge pane: %s\n", targetPane)
@@ -459,7 +481,7 @@ func runSlingFormula(ctx context.Context, args []string) (err error) {
 	// Step 2: Create wisp instance (ephemeral)
 	fmt.Printf("  Creating wisp...\n")
 	wispArgs := []string{"mol", "wisp", formulaName}
-	for _, v := range slingVars {
+	for _, v := range standaloneFormulaVars(formulaName, targetAgent, slingVars) {
 		wispArgs = append(wispArgs, "--var", v)
 	}
 	wispArgs = append(wispArgs, "--json")
