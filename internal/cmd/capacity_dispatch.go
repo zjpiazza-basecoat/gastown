@@ -188,6 +188,8 @@ func dispatchScheduledWork(townRoot, actor string, batchOverride int, dryRun boo
 			return beadsForPendingContext(townRoot, b).CloseSlingContext(b.ID, "dispatched")
 		},
 		OnFailure: func(b capacity.PendingBead, err error) {
+			fmt.Fprintf(os.Stderr, "%s Dispatch failed for %s → %s: %v\n",
+				style.Warning.Render("⚠"), b.WorkBeadID, b.TargetRig, err)
 			var onSuccessErr *capacity.ErrOnSuccessFailed
 			var admissionErr *polecatCapacityAdmissionError
 			if errors.As(err, &onSuccessErr) {
