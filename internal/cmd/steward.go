@@ -106,8 +106,9 @@ Actions:
     stashes, or branches whose issue cannot be inferred by gt mq submit
   - rerun scheduler status after reconciliation
 
-This command is intentionally conservative. It does not nuke worktrees and does
-not force-push, reset, stash, or delete branches.`,
+This command is intentionally conservative. It only nukes polecats after
+check-recovery reports SAFE_TO_NUKE and gt polecat nuke safety checks pass. It
+does not force-push, reset, stash, or bypass nuke safety checks.`,
 	RunE: runStewardReconcilePolecats,
 }
 
@@ -312,7 +313,7 @@ reconcile_health_once() {
 
 reconcile_polecats_once() {
   log "polecat recovery reconciliation"
-  timeout 180 /home/d3adb0y/.local/bin/gt steward reconcile-polecats --rig app --limit 5 >>"$LOG" 2>&1 || log "reconcile-polecats timed out/failed; continuing"
+  timeout 300 /home/d3adb0y/.local/bin/gt steward reconcile-polecats --rig app >>"$LOG" 2>&1 || log "reconcile-polecats timed out/failed; continuing"
 }
 
 validate_once() {
@@ -801,7 +802,7 @@ func runStewardReconcilePolecats(cmd *cobra.Command, args []string) error {
 		outcome := stewardReconcileOnePolecat(townRoot, item)
 		report.Items = append(report.Items, outcome)
 		switch outcome.Action {
-		case "refreshed", "submitted":
+		case "refreshed", "submitted", "nuked":
 			report.Changed++
 			if outcome.Action == "submitted" {
 				report.Submitted++
@@ -852,7 +853,22 @@ func stewardReconcileOnePolecat(townRoot string, item polecatListItem) stewardRe
 		outcome.Detail = "check-recovery failed: " + err.Error()
 		return outcome
 	}
-	if refreshed.Reusable || refreshed.SafeToNuke || !refreshed.NeedsRecovery {
+	if refreshed.Reusable || refreshed.SafeToNuke {
+		if stewardReconcilePolecatsDryRun {
+			outcome.Action = "dry-run"
+			outcome.Detail = fmt.Sprintf("would nuke; check-recovery reports %s (%s)", refreshed.Verdict, refreshed.Reason)
+			return outcome
+		}
+		if err := stewardNukePolecat(townRoot, addr); err != nil {
+			outcome.Action = "skipped"
+			outcome.Detail = "nuke refused/failed: " + err.Error()
+			return outcome
+		}
+		outcome.Action = "nuked"
+		outcome.Detail = fmt.Sprintf("nuked after check-recovery reported %s (%s)", refreshed.Verdict, refreshed.Reason)
+		return outcome
+	}
+	if !refreshed.NeedsRecovery {
 		if stewardReconcilePolecatsDryRun {
 			outcome.Action = "dry-run"
 			outcome.Detail = fmt.Sprintf("would refresh stale state; check-recovery reports %s (%s)", refreshed.Verdict, refreshed.Reason)
@@ -933,6 +949,21 @@ func stewardPolecatGitStateFor(townRoot, addr string) (*stewardPolecatGitState, 
 		return nil, err
 	}
 	return &state, nil
+}
+
+func stewardNukePolecat(townRoot, addr string) error {
+	cmd := exec.Command("gt", "polecat", "nuke", addr)
+	cmd.Dir = townRoot
+	var stderr bytes.Buffer
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	if s := strings.TrimSpace(stderr.String()); s != "" {
+		fmt.Fprintln(os.Stderr, s)
+	}
+	return nil
 }
 
 func stewardSubmitPolecatBranch(townRoot, rigName, branch string) error {

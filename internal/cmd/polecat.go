@@ -1181,6 +1181,10 @@ func runPolecatCheckRecovery(cmd *cobra.Command, args []string) error {
 			}
 		}
 		loadGitState()
+		if (input.CleanupStatus == "" || input.CleanupStatus == polecat.CleanupUnknown) && gitErr == nil && gitState != nil && gitState.Clean && p.State == polecat.StateIdle {
+			input.CleanupStatus = polecat.CleanupClean
+			status.Diagnostics = append(status.Diagnostics, fmt.Sprintf("reconciled_missing_cleanup_status=clean direct_git_state=safe agent_state=%s", fields.AgentState))
+		}
 		applyGitStateToWorkstateInput(&input, p.ClonePath, gitState, gitErr)
 	}
 
@@ -1415,16 +1419,22 @@ func cleanupStatusReconcileCandidate(status *RecoveryStatus, p *polecat.Polecat,
 		return "", false
 	}
 	previous := polecat.CleanupStatus(fields.CleanupStatus)
-	if previous == "" || previous == polecat.CleanupClean {
+	if previous == polecat.CleanupClean {
 		return previous, false
 	}
-	if p.State != polecat.StateIdle || beads.AgentState(fields.AgentState) != beads.AgentStateIdle {
+	if p.State != polecat.StateIdle {
 		return previous, false
 	}
-	if status.NeedsRecovery || status.Verdict != "SAFE_TO_NUKE" {
+	if status.NeedsRecovery && status.Verdict != "NEEDS_MQ_SUBMIT" {
 		return previous, false
 	}
-	if status.Branch != "" && status.MQStatus != "submitted" && status.MQStatus != "not_required" {
+	if status.Verdict != "SAFE_TO_NUKE" && status.Verdict != "NEEDS_MQ_SUBMIT" {
+		return previous, false
+	}
+	if status.CleanupStatus != polecat.CleanupClean {
+		return previous, false
+	}
+	if status.Verdict == "SAFE_TO_NUKE" && status.Branch != "" && status.MQStatus != "submitted" && status.MQStatus != "not_required" {
 		return previous, false
 	}
 	return previous, true
