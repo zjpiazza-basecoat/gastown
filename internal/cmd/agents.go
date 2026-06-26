@@ -24,6 +24,7 @@ type AgentType int
 const (
 	AgentMayor AgentType = iota
 	AgentDeacon
+	AgentSteward
 	AgentWitness
 	AgentRefinery
 	AgentCrew
@@ -45,6 +46,7 @@ type AgentSession struct {
 var AgentTypeColors = map[AgentType]string{
 	AgentMayor:    "#[fg=red,bold]",
 	AgentDeacon:   "#[fg=yellow,bold]",
+	AgentSteward:  "#[fg=green,bold]",
 	AgentWitness:  "#[fg=cyan]",
 	AgentRefinery: "#[fg=blue]",
 	AgentCrew:     "#[fg=green]",
@@ -66,6 +68,7 @@ var rigTypeOrder = map[AgentType]int{
 var AgentTypeIcons = map[AgentType]string{
 	AgentMayor:    constants.EmojiMayor,
 	AgentDeacon:   constants.EmojiDeacon,
+	AgentSteward:  constants.EmojiSteward,
 	AgentWitness:  constants.EmojiWitness,
 	AgentRefinery: constants.EmojiRefinery,
 	AgentCrew:     constants.EmojiCrew,
@@ -164,6 +167,8 @@ func categorizeSession(name string) *AgentSession {
 		sess.Type = AgentMayor
 	case session.RoleDeacon:
 		sess.Type = AgentDeacon
+	case session.RoleSteward:
+		sess.Type = AgentSteward
 	case session.RoleWitness:
 		sess.Type = AgentWitness
 	case session.RoleRefinery:
@@ -341,6 +346,12 @@ func filterAndSortSessions(sessionNames []string, includePolecats bool) []*Agent
 		if b.Type == AgentDeacon {
 			return false
 		}
+		if a.Type == AgentSteward {
+			return true
+		}
+		if b.Type == AgentSteward {
+			return false
+		}
 
 		// Then by rig name
 		if a.Rig != b.Rig {
@@ -380,6 +391,8 @@ func (a *AgentSession) displayLabel() string {
 		return fmt.Sprintf("%s%s Mayor#[default]", color, icon)
 	case AgentDeacon:
 		return fmt.Sprintf("%s%s Deacon#[default]", color, icon)
+	case AgentSteward:
+		return fmt.Sprintf("%s%s Steward#[default]", color, icon)
 	case AgentWitness:
 		return fmt.Sprintf("%s%s %s/witness#[default]", color, icon, a.Rig)
 	case AgentRefinery:
@@ -508,7 +521,7 @@ func runAgents(cmd *cobra.Command, args []string) error {
 		for _, agent := range group.Sessions {
 			if agent.Type != AgentPersonal && agent.Type != AgentTest &&
 				agent.Rig != "" && agent.Rig != currentRig &&
-				agent.Type != AgentMayor && agent.Type != AgentDeacon {
+				agent.Type != AgentMayor && agent.Type != AgentDeacon && agent.Type != AgentSteward {
 				menuArgs = append(menuArgs,
 					fmt.Sprintf("-#[fg=white,dim]   %s", agent.Rig), "", "")
 				currentRig = agent.Rig
@@ -565,6 +578,8 @@ func runAgentsList(cmd *cobra.Command, args []string) error {
 			fmt.Printf("  %s Mayor\n", icon)
 		case AgentDeacon:
 			fmt.Printf("  %s Deacon\n", icon)
+		case AgentSteward:
+			fmt.Printf("  %s Steward\n", icon)
 		case AgentWitness:
 			fmt.Printf("  %s witness\n", icon)
 		case AgentRefinery:

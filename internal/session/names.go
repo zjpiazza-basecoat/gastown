@@ -23,6 +23,12 @@ func DeaconSessionName() string {
 	return HQPrefix + "deacon"
 }
 
+// StewardSessionName returns the session name for the Town Steward agent.
+// One steward per machine validates safe local stack upgrades and notifies Mayor.
+func StewardSessionName() string {
+	return HQPrefix + "steward"
+}
+
 // WitnessSessionName returns the session name for a rig's Witness agent.
 // rigPrefix is the rig's beads prefix (e.g., "gt" for gastown, "bd" for beads).
 func WitnessSessionName(rigPrefix string) string {
