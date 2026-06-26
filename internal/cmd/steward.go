@@ -475,7 +475,7 @@ func runStewardScan(cmd *cobra.Command, args []string) error {
 					Summary:        fmt.Sprintf("Scheduler reports %d recovery-blocked polecat(s). Steward can propose a safe reconciler for NEEDS_MQ_SUBMIT/NEEDS_RECOVERY states instead of leaving this as manual Mayor work.", status.Capacity.RecoveryBlocked),
 					Details:        "Implement gt steward reconcile-polecats --rig <rig>: classify recovery debt, submit/verify real MRs, safely clear clean detached worktrees, escalate ambiguous branches/stashes, and verify scheduler capacity.",
 					Risk:           "Must not nuke worktrees with unique commits, stashes, or real pending MRs.",
-					ApproveCommand: "gt mail send steward/ -s 'APPROVED: polecat recovery reconciler' -m 'Human approved implementing gt steward reconcile-polecats. File/implement the smallest safe patch, test, install, and return an upgrade-ready proposal.'",
+					ApproveCommand: "gt mail send steward -s 'APPROVED: polecat recovery reconciler' -m 'Human approved implementing gt steward reconcile-polecats. File/implement the smallest safe patch, test, install, and return an upgrade-ready proposal.'",
 				})
 			}
 		}
