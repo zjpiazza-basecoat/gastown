@@ -1,14 +1,22 @@
 package cmd
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/steveyegge/gastown/internal/config"
+	"github.com/steveyegge/gastown/internal/constants"
 	"github.com/steveyegge/gastown/internal/session"
 	"github.com/steveyegge/gastown/internal/style"
+	"github.com/steveyegge/gastown/internal/tmux"
 	"github.com/steveyegge/gastown/internal/workspace"
 )
 
@@ -58,6 +66,27 @@ var stewardAttachCmd = &cobra.Command{
 	RunE:    runStewardAttach,
 }
 
+var stewardScanCmd = &cobra.Command{
+	Use:   "scan",
+	Short: "Scan for systemic Gas Town issues and config drift",
+	Long: `Scan town state for symptoms the Steward should reconcile: scheduler pressure,
+raw polecat directory caps, recovery/MQ backlog, dead agents, Dolt health, and dirty
+local core repos. The scan is read-only and emits findings for the Steward agent to
+classify before notifying or patching.`,
+	RunE: runStewardScan,
+}
+
+var stewardValidateUpgradeCmd = &cobra.Command{
+	Use:   "validate-upgrade",
+	Short: "Validate local Gas Town upgrade candidate once",
+	Long: `Validate local Gastown/beads upgrade candidates in an isolated workspace.
+
+This command is deterministic support tooling for the Steward agent. It does not
+apply upgrades. On a green candidate, it sends Mayor mail telling the human that
+/gt-upgrade is available to run when convenient.`,
+	RunE: runStewardValidateUpgrade,
+}
+
 var stewardInterval string
 
 func init() {
@@ -67,6 +96,8 @@ func init() {
 	stewardCmd.AddCommand(stewardRestartCmd)
 	stewardCmd.AddCommand(stewardStatusCmd)
 	stewardCmd.AddCommand(stewardAttachCmd)
+	stewardCmd.AddCommand(stewardScanCmd)
+	stewardCmd.AddCommand(stewardValidateUpgradeCmd)
 	rootCmd.AddCommand(stewardCmd)
 }
 
@@ -145,6 +176,9 @@ while true; do
     log "validation failed with status $status; not announcing upgrade"
     date -u +%Y-%m-%dT%H:%M:%SZ > "$STATE/last_red_at"
   fi
+  if [ "${GT_STEWARD_ONCE:-0}" = "1" ]; then
+    exit 0
+  fi
   sleep "$INTERVAL"
 done
 `
@@ -172,17 +206,52 @@ func runStewardStart(cmd *cobra.Command, args []string) error {
 	if stewardIsRunning() {
 		return fmt.Errorf("Town Steward already running. Attach with: gt steward attach")
 	}
-	script, err := ensureStewardScript(townRoot)
-	if err != nil {
+	if _, err := ensureStewardScript(townRoot); err != nil {
 		return err
 	}
-
-	start := exec.Command("tmux", "new-session", "-d", "-s", stewardSessionName(), "-c", townRoot, script)
-	start.Env = append(os.Environ(), "GT_TOWN_ROOT="+townRoot, "GT_STEWARD_INTERVAL="+stewardInterval)
-	if err := start.Run(); err != nil {
-		return fmt.Errorf("starting Town Steward: %w", err)
+	stewardDir := filepath.Join(townRoot, "steward")
+	if err := os.MkdirAll(stewardDir, 0755); err != nil {
+		return fmt.Errorf("creating steward dir: %w", err)
 	}
-	fmt.Printf("%s Town Steward started. Attach with: %s\n", style.Bold.Render("✓"), style.Dim.Render("gt steward attach"))
+
+	accountsPath := constants.MayorAccountsPath(townRoot)
+	runtimeConfigDir, _, _ := config.ResolveAccountConfigDir(accountsPath, "")
+	if runtimeConfigDir == "" {
+		runtimeConfigDir = os.Getenv("CLAUDE_CONFIG_DIR")
+	}
+
+	t := tmux.NewTmux()
+	_, err = session.StartSession(t, session.SessionConfig{
+		SessionID:        stewardSessionName(),
+		WorkDir:          stewardDir,
+		Role:             string(session.RoleSteward),
+		TownRoot:         townRoot,
+		AgentName:        "Steward",
+		RuntimeConfigDir: runtimeConfigDir,
+		Beacon: session.BeaconConfig{
+			Recipient: "steward",
+			Sender:    "human",
+			Topic:     "reconciliation",
+		},
+		Instructions: `You are the Town Steward, the autonomous reconciliation controller for Gas Town itself.
+
+Your loop:
+1. Run gt prime.
+2. Periodically run: gt steward scan and gt steward validate-upgrade.
+3. Use scan findings to classify: config/steering vs operational cleanup vs platform gap.
+4. If validation is green, ensure Mayor/user has mail saying /gt-upgrade is available.
+5. If validation is red, file or escalate only when actionable.
+6. Never apply upgrades automatically. The human chooses when to run /gt-upgrade.
+7. Prefer mail-first, non-invasive notifications. Do not spam duplicate alerts.`,
+		WaitForAgent: true,
+		WaitFatal:    true,
+		AutoRespawn:  true,
+		AcceptBypass: true,
+	})
+	if err != nil {
+		return fmt.Errorf("starting Town Steward agent: %w", err)
+	}
+	fmt.Printf("%s Town Steward agent started. Attach with: %s\n", style.Bold.Render("✓"), style.Dim.Render("gt steward attach"))
 	return nil
 }
 
@@ -221,4 +290,173 @@ func runStewardAttach(cmd *cobra.Command, args []string) error {
 	attach.Stdout = os.Stdout
 	attach.Stderr = os.Stderr
 	return attach.Run()
+}
+
+type stewardFinding struct {
+	Severity string `json:"severity"`
+	Kind     string `json:"kind"`
+	Summary  string `json:"summary"`
+	Detail   string `json:"detail,omitempty"`
+}
+
+type stewardScanReport struct {
+	Findings []stewardFinding `json:"findings"`
+}
+
+type stewardHealthMetric struct {
+	Timestamp          time.Time               `json:"timestamp"`
+	FindingsTotal      int                     `json:"findings_total"`
+	FindingsBySeverity map[string]int          `json:"findings_by_severity"`
+	FindingsByKind     map[string]int          `json:"findings_by_kind"`
+	Scheduler          *stewardSchedulerStatus `json:"scheduler,omitempty"`
+	Polecats           map[string]int          `json:"polecats,omitempty"`
+	DirtyCoreRepos     []string                `json:"dirty_core_repos,omitempty"`
+}
+
+type stewardSchedulerStatus struct {
+	QueuedTotal int `json:"queued_total"`
+	QueuedReady int `json:"queued_ready"`
+	Capacity    struct {
+		Max             int `json:"max"`
+		Working         int `json:"working"`
+		RecoveryBlocked int `json:"recovery_blocked"`
+		ReusableIdle    int `json:"reusable_idle"`
+		Free            int `json:"free"`
+		ActiveSessions  int `json:"active_sessions"`
+	} `json:"capacity"`
+}
+
+type polecatListItem struct {
+	Rig      string `json:"rig"`
+	Verdict  string `json:"verdict"`
+	Reason   string `json:"reason"`
+	Reusable bool   `json:"reusable"`
+}
+
+func runStewardScan(cmd *cobra.Command, args []string) error {
+	townRoot, err := workspace.FindFromCwdOrError()
+	if err != nil {
+		return fmt.Errorf("not in a Gas Town workspace: %w", err)
+	}
+	report := stewardScanReport{}
+	metric := stewardHealthMetric{Timestamp: time.Now().UTC(), FindingsBySeverity: map[string]int{}, FindingsByKind: map[string]int{}}
+
+	if out, err := runStewardCapture(townRoot, "gt", "scheduler", "status", "--json"); err == nil {
+		var status stewardSchedulerStatus
+		if json.Unmarshal(out, &status) == nil {
+			metric.Scheduler = &status
+			if status.QueuedReady > 0 && status.Capacity.Free > 0 && status.Capacity.ActiveSessions == 0 {
+				report.Findings = append(report.Findings, stewardFinding{
+					Severity: "high",
+					Kind:     "scheduler-dispatch-stalled",
+					Summary:  "Scheduler has ready work and free capacity but no active sessions",
+					Detail:   fmt.Sprintf("queued_ready=%d free=%d reusable_idle=%d recovery_blocked=%d", status.QueuedReady, status.Capacity.Free, status.Capacity.ReusableIdle, status.Capacity.RecoveryBlocked),
+				})
+			}
+			if status.Capacity.RecoveryBlocked > 0 {
+				report.Findings = append(report.Findings, stewardFinding{Severity: "medium", Kind: "recovery-debt", Summary: "Polecat recovery debt present", Detail: fmt.Sprintf("recovery_blocked=%d", status.Capacity.RecoveryBlocked)})
+			}
+		}
+	} else {
+		report.Findings = append(report.Findings, stewardFinding{Severity: "medium", Kind: "scheduler-status-unavailable", Summary: "Could not read scheduler status", Detail: err.Error()})
+	}
+
+	if out, err := runStewardCapture(townRoot, "gt", "polecat", "list", "app", "--all", "--json"); err == nil {
+		var items []polecatListItem
+		if json.Unmarshal(out, &items) == nil {
+			counts := map[string]int{}
+			reusable := 0
+			for _, item := range items {
+				if item.Reusable {
+					reusable++
+				}
+				key := item.Verdict + ":" + item.Reason
+				counts[key]++
+			}
+			metric.Polecats = counts
+			metric.Polecats["total"] = len(items)
+			metric.Polecats["reusable"] = reusable
+			if len(items) >= 30 && reusable == 0 {
+				report.Findings = append(report.Findings, stewardFinding{Severity: "high", Kind: "polecat-raw-dir-cap", Summary: "app rig is at raw polecat directory cap with no reusable dirs", Detail: fmt.Sprintf("dirs=%d reusable=%d", len(items), reusable)})
+			}
+			var keys []string
+			for k := range counts {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			var parts []string
+			for _, k := range keys {
+				parts = append(parts, fmt.Sprintf("%s=%d", k, counts[k]))
+			}
+			if len(parts) > 0 {
+				report.Findings = append(report.Findings, stewardFinding{Severity: "info", Kind: "polecat-workstate-summary", Summary: "app polecat workstate distribution", Detail: strings.Join(parts, ", ")})
+			}
+		}
+	}
+
+	for _, repo := range []struct{ name, path string }{{"gastown", filepath.Join(os.Getenv("HOME"), "code", "gastownhall", "gastown")}, {"beads", filepath.Join(os.Getenv("HOME"), "code", "gastownhall", "beads")}} {
+		if out, err := exec.Command("git", "-C", repo.path, "status", "--porcelain").Output(); err == nil && len(bytes.TrimSpace(out)) > 0 {
+			metric.DirtyCoreRepos = append(metric.DirtyCoreRepos, repo.name)
+			report.Findings = append(report.Findings, stewardFinding{Severity: "medium", Kind: "dirty-core-repo", Summary: repo.name + " core repo has local changes", Detail: string(bytes.TrimSpace(out))})
+		}
+	}
+
+	recordStewardHealthMetric(townRoot, &metric, report.Findings)
+	if len(report.Findings) == 0 {
+		fmt.Println("Town Steward scan: no findings")
+		return nil
+	}
+	data, _ := json.MarshalIndent(report, "", "  ")
+	fmt.Println(string(data))
+	return nil
+}
+
+func recordStewardHealthMetric(townRoot string, metric *stewardHealthMetric, findings []stewardFinding) {
+	if metric == nil {
+		return
+	}
+	metric.FindingsTotal = len(findings)
+	for _, finding := range findings {
+		metric.FindingsBySeverity[finding.Severity]++
+		metric.FindingsByKind[finding.Kind]++
+	}
+	runtimeDir := filepath.Join(townRoot, ".runtime", "steward")
+	if err := os.MkdirAll(runtimeDir, 0755); err != nil {
+		return
+	}
+	data, err := json.Marshal(metric)
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(runtimeDir, "health.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.Write(append(data, '\n'))
+}
+
+func runStewardCapture(townRoot string, name string, args ...string) ([]byte, error) {
+	c := exec.Command(name, args...)
+	c.Dir = townRoot
+	return c.Output()
+}
+
+func runStewardValidateUpgrade(cmd *cobra.Command, args []string) error {
+	townRoot, err := workspace.FindFromCwdOrError()
+	if err != nil {
+		return fmt.Errorf("not in a Gas Town workspace: %w", err)
+	}
+	script, err := ensureStewardScript(townRoot)
+	if err != nil {
+		return err
+	}
+	validate := exec.Command(script)
+	validate.Env = append(os.Environ(), "GT_TOWN_ROOT="+townRoot, "GT_STEWARD_ONCE=1")
+	validate.Stdout = os.Stdout
+	validate.Stderr = os.Stderr
+	if err := validate.Run(); err != nil {
+		return fmt.Errorf("validating upgrade candidate: %w", err)
+	}
+	return nil
 }
