@@ -171,6 +171,61 @@ const createHealthModal = (initialState, ctx, done) => {
   return component;
 };
 
+const createProposalModal = (proposal, ctx, done) => ({
+  handleInput(data) {
+    if (matchesKey(data, Key.enter) || data === "y" || data === "Y") done("approve");
+    else if (data === "n" || data === "N") done("reject");
+    else if (matchesKey(data, Key.escape) || data === "l" || data === "L" || data === "q") done("later");
+  },
+  invalidate() {},
+  render(width) {
+    const theme = ctx.ui.theme;
+    const innerWidth = Math.max(20, width - 4);
+    const border = (left, fill, right) => truncateToWidth(`${left}${fill.repeat(Math.max(0, width - 2))}${right}`, width);
+    const row = (content) => {
+      const clipped = truncateToWidth(content, innerWidth);
+      return truncateToWidth(`│ ${clipped}${" ".repeat(Math.max(0, innerWidth - visibleWidth(clipped)))} │`, width);
+    };
+    const title = proposal.kind === "upgrade"
+      ? theme.fg("success", theme.bold("Upgrade ready"))
+      : theme.fg("accent", theme.bold("Steward proposal"));
+    const body = [
+      proposal.title || proposal.id,
+      "",
+      ...(proposal.summary ? wrapTextWithAnsi(proposal.summary, innerWidth) : []),
+      ...(proposal.details ? ["", ...wrapTextWithAnsi(proposal.details, innerWidth)] : []),
+      ...(proposal.risk ? ["", theme.fg("warning", "Risk: ") + proposal.risk] : []),
+    ];
+    const lines = [border("╭", "─", "╮"), row(title), row(theme.fg("dim", proposal.id)), border("├", "─", "┤")];
+    for (const line of body.slice(0, 22)) lines.push(row(line));
+    lines.push(border("├", "─", "┤"));
+    lines.push(row(theme.fg("success", "enter/y approve") + theme.fg("dim", " • n reject • esc/l later")));
+    lines.push(border("╰", "─", "╯"));
+    return lines;
+  },
+});
+
+const checkStewardProposals = async (pi, ctx) => {
+  if (ctx.mode !== "tui" || !ctx.hasUI) return;
+  const result = await pi.exec(gtBin, ["steward", "proposal", "list", "--pending", "--json"], { cwd: ctx.cwd, timeout: 10000 }).catch(() => null);
+  if (!result || result.code !== 0 || !result.stdout?.trim()) return;
+  let proposals = [];
+  try { proposals = JSON.parse(result.stdout); } catch { return; }
+  if (!Array.isArray(proposals) || proposals.length === 0) return;
+  const proposal = proposals[0];
+  const action = await ctx.ui.custom((_tui, _theme, _keybindings, done) => createProposalModal(proposal, ctx, done), {
+    overlay: true,
+    overlayOptions: { width: "70%", minWidth: 58, maxHeight: "85%", anchor: "center", margin: 1 },
+  });
+  if (action === "approve") {
+    const approve = await pi.exec(gtBin, ["steward", "proposal", "approve", proposal.id], { cwd: ctx.cwd, timeout: 120000 });
+    ctx.ui.notify(approve.code === 0 ? `Approved ${proposal.id}` : `Approval failed: ${approve.stderr || approve.stdout}`, approve.code === 0 ? "info" : "error");
+  } else if (action === "reject") {
+    const reject = await pi.exec(gtBin, ["steward", "proposal", "reject", proposal.id], { cwd: ctx.cwd, timeout: 30000 });
+    ctx.ui.notify(reject.code === 0 ? `Rejected ${proposal.id}` : `Reject failed: ${reject.stderr || reject.stdout}`, reject.code === 0 ? "info" : "error");
+  }
+};
+
 const showHealthModal = async (pi, ctx) => {
   if (ctx.mode !== "tui") {
     const result = await pi.exec(gtBin, ["health"], { cwd: ctx.cwd, timeout: 15000 });
@@ -201,11 +256,27 @@ export default (pi) => {
   let primeContext = null;
   let contextInjected = false;
   let lastMailCheck = 0;
+  let lastProposalCheck = 0;
+  let proposalCheckRunning = false;
 
   const isHumanCoordinationSurface = () =>
     role === "mayor" || role === "mayor/" || role === "overseer" || role === "human";
 
   const shouldInjectMail = () => !isHumanCoordinationSurface();
+
+  const maybeCheckStewardProposals = async (ctx, force = false) => {
+    if (!isHumanCoordinationSurface()) return;
+    const now = Date.now();
+    if (!force && now - lastProposalCheck < 60000) return;
+    if (proposalCheckRunning) return;
+    proposalCheckRunning = true;
+    lastProposalCheck = now;
+    try {
+      await checkStewardProposals(pi, ctx);
+    } finally {
+      proposalCheckRunning = false;
+    }
+  };
 
   pi.registerCommand("gt-health", {
     description: "Show Gas Town health as a Pi-native modal",
@@ -218,6 +289,7 @@ export default (pi) => {
   pi.on("session_start", async (event, context) => {
     if (context.hasUI) {
       loadHealth(pi, context.cwd).then((state) => updateHealthStatus(context, state));
+      setTimeout(() => { maybeCheckStewardProposals(context, true); }, 500);
     }
 
     try {
@@ -284,6 +356,10 @@ export default (pi) => {
         systemPrompt: event.systemPrompt + "\n\n" + mailContext,
       };
     }
+  });
+
+  pi.on("agent_end", async (_event, context) => {
+    await maybeCheckStewardProposals(context);
   });
 
   // PreToolUse equivalent — guard dangerous git operations

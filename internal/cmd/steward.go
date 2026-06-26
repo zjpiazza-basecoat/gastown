@@ -93,6 +93,39 @@ This command deliberately refuses destructive or ambiguous repair.`,
 	RunE: runStewardReconcileHealth,
 }
 
+var stewardProposalCmd = &cobra.Command{
+	Use:     "proposal",
+	Aliases: []string{"proposals"},
+	Short:   "Manage Steward approval proposals",
+	RunE:    requireSubcommand,
+}
+
+var stewardProposalListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List Steward proposals",
+	RunE:  runStewardProposalList,
+}
+
+var stewardProposalCreateCmd = &cobra.Command{
+	Use:   "create",
+	Short: "Create a Steward proposal",
+	RunE:  runStewardProposalCreate,
+}
+
+var stewardProposalApproveCmd = &cobra.Command{
+	Use:   "approve <id>",
+	Short: "Approve and execute a Steward proposal",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runStewardProposalApprove,
+}
+
+var stewardProposalRejectCmd = &cobra.Command{
+	Use:   "reject <id>",
+	Short: "Reject a Steward proposal",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runStewardProposalReject,
+}
+
 var stewardValidateUpgradeCmd = &cobra.Command{
 	Use:   "validate-upgrade",
 	Short: "Validate local Gas Town upgrade candidate once",
@@ -105,6 +138,15 @@ apply upgrades. On a green candidate, it sends Mayor mail telling the human that
 }
 
 var stewardInterval string
+var stewardProposalJSON bool
+var stewardProposalPending bool
+var stewardProposalKind string
+var stewardProposalTitle string
+var stewardProposalSummary string
+var stewardProposalDetails string
+var stewardProposalApproveCommand string
+var stewardProposalRejectCommand string
+var stewardProposalRisk string
 
 func init() {
 	stewardStartCmd.Flags().StringVar(&stewardInterval, "interval", "1800", "Validation interval in seconds")
@@ -115,6 +157,18 @@ func init() {
 	stewardCmd.AddCommand(stewardAttachCmd)
 	stewardCmd.AddCommand(stewardScanCmd)
 	stewardCmd.AddCommand(stewardReconcileHealthCmd)
+	stewardProposalListCmd.Flags().BoolVar(&stewardProposalJSON, "json", false, "Output JSON")
+	stewardProposalListCmd.Flags().BoolVar(&stewardProposalPending, "pending", false, "Only pending proposals")
+	stewardProposalCreateCmd.Flags().StringVar(&stewardProposalKind, "kind", "implementation", "Proposal kind (implementation, upgrade)")
+	stewardProposalCreateCmd.Flags().StringVar(&stewardProposalTitle, "title", "", "Proposal title")
+	stewardProposalCreateCmd.Flags().StringVar(&stewardProposalSummary, "summary", "", "Proposal summary")
+	stewardProposalCreateCmd.Flags().StringVar(&stewardProposalDetails, "details", "", "Proposal details")
+	stewardProposalCreateCmd.Flags().StringVar(&stewardProposalRisk, "risk", "", "Risk note")
+	stewardProposalCreateCmd.Flags().StringVar(&stewardProposalApproveCommand, "approve-command", "", "Command to run on approval")
+	stewardProposalCreateCmd.Flags().StringVar(&stewardProposalRejectCommand, "reject-command", "", "Command to run on rejection")
+	_ = stewardProposalCreateCmd.MarkFlagRequired("title")
+	stewardProposalCmd.AddCommand(stewardProposalListCmd, stewardProposalCreateCmd, stewardProposalApproveCmd, stewardProposalRejectCmd)
+	stewardCmd.AddCommand(stewardProposalCmd)
 	stewardCmd.AddCommand(stewardValidateUpgradeCmd)
 	rootCmd.AddCommand(stewardCmd)
 }
@@ -176,10 +230,14 @@ validate_once() {
 
   if [ "$(cat "$STATE/last_green" 2>/dev/null || true)" != "$key" ]; then
     printf '%s' "$key" > "$STATE/last_green"
-    /home/d3adb0y/.local/bin/gt mail send mayor/ \
-      -s "✅ Gas Town upgrade validated" \
-      -m "Town Steward validated a green local upgrade candidate.\n\nGastown: ${gt_sha}\nBeads: ${bd_sha}\n\nTests/builds passed in isolated workspace: $work\n\nApply when convenient with: /gt-upgrade\nOr CLI: /home/d3adb0y/gt/scripts/gt-upgrade-local.sh" || true
-    log "notified mayor of green upgrade ${gt_sha:0:8}/${bd_sha:0:8}"
+    /home/d3adb0y/.local/bin/gt steward proposal create \
+      --kind upgrade \
+      --title "Gas Town upgrade ready" \
+      --summary "Town Steward validated a green local upgrade candidate." \
+      --details "Gastown: ${gt_sha}\nBeads: ${bd_sha}\n\nTests/builds passed in isolated workspace: $work" \
+      --risk "Applies local gt/bd binaries and may require session reload/restart." \
+      --approve-command "/home/d3adb0y/gt/scripts/gt-upgrade-local.sh" || true
+    log "created upgrade-ready proposal ${gt_sha:0:8}/${bd_sha:0:8}"
   else
     log "green candidate already announced"
   fi
@@ -411,6 +469,14 @@ func runStewardScan(cmd *cobra.Command, args []string) error {
 			}
 			if status.Capacity.RecoveryBlocked > 0 {
 				report.Findings = append(report.Findings, stewardFinding{Severity: "medium", Kind: "recovery-debt", Summary: "Polecat recovery debt present", Detail: fmt.Sprintf("recovery_blocked=%d", status.Capacity.RecoveryBlocked)})
+				ensureStewardProposal(townRoot, stewardProposal{
+					Kind:           "implementation",
+					Title:          "Add automatic polecat recovery reconciliation",
+					Summary:        fmt.Sprintf("Scheduler reports %d recovery-blocked polecat(s). Steward can propose a safe reconciler for NEEDS_MQ_SUBMIT/NEEDS_RECOVERY states instead of leaving this as manual Mayor work.", status.Capacity.RecoveryBlocked),
+					Details:        "Implement gt steward reconcile-polecats --rig <rig>: classify recovery debt, submit/verify real MRs, safely clear clean detached worktrees, escalate ambiguous branches/stashes, and verify scheduler capacity.",
+					Risk:           "Must not nuke worktrees with unique commits, stashes, or real pending MRs.",
+					ApproveCommand: "gt mail send steward/ -s 'APPROVED: polecat recovery reconciler' -m 'Human approved implementing gt steward reconcile-polecats. File/implement the smallest safe patch, test, install, and return an upgrade-ready proposal.'",
+				})
 			}
 		}
 	} else {
@@ -563,6 +629,209 @@ func runStewardReconcileHealth(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("verifying health: %w", err)
 	}
 	return nil
+}
+
+type stewardProposal struct {
+	ID             string    `json:"id"`
+	Kind           string    `json:"kind"`
+	Status         string    `json:"status"`
+	Title          string    `json:"title"`
+	Summary        string    `json:"summary,omitempty"`
+	Details        string    `json:"details,omitempty"`
+	Risk           string    `json:"risk,omitempty"`
+	ApproveCommand string    `json:"approve_command,omitempty"`
+	RejectCommand  string    `json:"reject_command,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+func stewardProposalPath(townRoot string) string {
+	return filepath.Join(townRoot, ".runtime", "steward", "proposals.jsonl")
+}
+
+func loadStewardProposals(townRoot string) ([]stewardProposal, error) {
+	path := stewardProposalPath(townRoot)
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []stewardProposal
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var p stewardProposal
+		if err := json.Unmarshal(line, &p); err == nil && p.ID != "" {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+func saveStewardProposals(townRoot string, proposals []stewardProposal) error {
+	path := stewardProposalPath(townRoot)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	for _, p := range proposals {
+		data, err := json.Marshal(p)
+		if err != nil {
+			return err
+		}
+		buf.Write(data)
+		buf.WriteByte('\n')
+	}
+	return os.WriteFile(path, buf.Bytes(), 0644)
+}
+
+func ensureStewardProposal(townRoot string, proposal stewardProposal) {
+	if proposal.Title == "" || proposal.Kind == "" {
+		return
+	}
+	proposals, err := loadStewardProposals(townRoot)
+	if err != nil {
+		return
+	}
+	for _, p := range proposals {
+		if p.Status == "pending" && p.Kind == proposal.Kind && p.Title == proposal.Title {
+			return
+		}
+	}
+	now := time.Now().UTC()
+	proposal.ID = fmt.Sprintf("stew-%d", now.UnixNano())
+	proposal.Status = "pending"
+	proposal.CreatedAt = now
+	proposal.UpdatedAt = now
+	proposals = append(proposals, proposal)
+	_ = saveStewardProposals(townRoot, proposals)
+}
+
+func runStewardProposalList(cmd *cobra.Command, args []string) error {
+	townRoot, err := workspace.FindFromCwdOrError()
+	if err != nil {
+		return fmt.Errorf("not in a Gas Town workspace: %w", err)
+	}
+	proposals, err := loadStewardProposals(townRoot)
+	if err != nil {
+		return err
+	}
+	var filtered []stewardProposal
+	for _, p := range proposals {
+		if stewardProposalPending && p.Status != "pending" {
+			continue
+		}
+		filtered = append(filtered, p)
+	}
+	if stewardProposalJSON {
+		if filtered == nil {
+			filtered = []stewardProposal{}
+		}
+		data, _ := json.MarshalIndent(filtered, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+	if len(filtered) == 0 {
+		fmt.Println("No Steward proposals")
+		return nil
+	}
+	for _, p := range filtered {
+		fmt.Printf("%s [%s/%s] %s\n", p.ID, p.Kind, p.Status, p.Title)
+		if p.Summary != "" {
+			fmt.Printf("  %s\n", p.Summary)
+		}
+	}
+	return nil
+}
+
+func runStewardProposalCreate(cmd *cobra.Command, args []string) error {
+	townRoot, err := workspace.FindFromCwdOrError()
+	if err != nil {
+		return fmt.Errorf("not in a Gas Town workspace: %w", err)
+	}
+	proposals, err := loadStewardProposals(townRoot)
+	if err != nil {
+		return err
+	}
+	// Deduplicate pending proposals by kind+title so Steward loops do not spam modals.
+	for _, p := range proposals {
+		if p.Status == "pending" && p.Kind == stewardProposalKind && p.Title == stewardProposalTitle {
+			fmt.Println(p.ID)
+			return nil
+		}
+	}
+	now := time.Now().UTC()
+	p := stewardProposal{
+		ID:             fmt.Sprintf("stew-%d", now.UnixNano()),
+		Kind:           stewardProposalKind,
+		Status:         "pending",
+		Title:          stewardProposalTitle,
+		Summary:        stewardProposalSummary,
+		Details:        stewardProposalDetails,
+		Risk:           stewardProposalRisk,
+		ApproveCommand: stewardProposalApproveCommand,
+		RejectCommand:  stewardProposalRejectCommand,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	proposals = append(proposals, p)
+	if err := saveStewardProposals(townRoot, proposals); err != nil {
+		return err
+	}
+	fmt.Println(p.ID)
+	return nil
+}
+
+func runStewardProposalApprove(cmd *cobra.Command, args []string) error {
+	return updateStewardProposal(args[0], "approved", true)
+}
+
+func runStewardProposalReject(cmd *cobra.Command, args []string) error {
+	return updateStewardProposal(args[0], "rejected", false)
+}
+
+func updateStewardProposal(id, status string, approve bool) error {
+	townRoot, err := workspace.FindFromCwdOrError()
+	if err != nil {
+		return fmt.Errorf("not in a Gas Town workspace: %w", err)
+	}
+	proposals, err := loadStewardProposals(townRoot)
+	if err != nil {
+		return err
+	}
+	for i := range proposals {
+		if proposals[i].ID != id {
+			continue
+		}
+		if proposals[i].Status != "pending" {
+			return fmt.Errorf("proposal %s is already %s", id, proposals[i].Status)
+		}
+		command := proposals[i].RejectCommand
+		if approve {
+			command = proposals[i].ApproveCommand
+		}
+		if command != "" {
+			run := exec.Command("/bin/sh", "-lc", command)
+			run.Dir = townRoot
+			run.Stdout = os.Stdout
+			run.Stderr = os.Stderr
+			if err := run.Run(); err != nil {
+				return fmt.Errorf("running proposal command: %w", err)
+			}
+		}
+		proposals[i].Status = status
+		proposals[i].UpdatedAt = time.Now().UTC()
+		if err := saveStewardProposals(townRoot, proposals); err != nil {
+			return err
+		}
+		fmt.Printf("%s proposal %s\n", status, id)
+		return nil
+	}
+	return fmt.Errorf("proposal %s not found", id)
 }
 
 func runStewardValidateUpgrade(cmd *cobra.Command, args []string) error {
