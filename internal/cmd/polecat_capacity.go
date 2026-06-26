@@ -275,17 +275,7 @@ func applyAgentFieldsToCapacitySnapshot(snapshot *polecatCapacitySnapshot, rigPa
 		snapshot.RecoveryBlocked++
 		return
 	}
-	if fields.ActiveMR != "" || (fields.CleanupStatus != "" && fields.CleanupStatus != "clean") {
-		if applyCanonicalCapacitySnapshot(snapshot, rigPath, rigName, polecatName, fields, tmuxClient) {
-			return
-		}
-	}
-	if fields.ActiveMR != "" {
-		snapshot.PendingMR++
-		return
-	}
-	if fields.CleanupStatus == "clean" || state == "nuked" {
-		snapshot.ReusableIdle++
+	if applyCanonicalCapacitySnapshot(snapshot, rigPath, rigName, polecatName, fields, tmuxClient) {
 		return
 	}
 	snapshot.RecoveryBlocked++
@@ -296,7 +286,10 @@ func applyCanonicalCapacitySnapshot(snapshot *polecatCapacitySnapshot, rigPath, 
 		return false
 	}
 	state := polecat.State(strings.TrimSpace(fields.AgentState))
-	if state == "" {
+	if state == "" || state == "nuked" {
+		// A preserved directory with stale agent_state=nuked is still an idle
+		// sandbox for capacity purposes. Classify it through canonical idle
+		// workstate so MQ/recovery blockers are not hidden as reusable capacity.
 		state = polecat.StateIdle
 	}
 	issueID := fields.LastSourceIssue
