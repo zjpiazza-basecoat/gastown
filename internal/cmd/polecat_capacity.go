@@ -35,7 +35,12 @@ type polecatCapacitySnapshot struct {
 }
 
 func (s polecatCapacitySnapshot) occupied() int {
-	return s.Working + s.RecoveryBlocked + s.Reservations
+	// Capacity is an admission/concurrency guard, not a cleanup gate. Stopped
+	// idle polecats that need recovery must remain visible in RecoveryBlocked,
+	// but they are not active execution and must not prevent new clean polecats
+	// from being admitted. Otherwise a backlog of stale dirty worktrees can
+	// deadlock the scheduler at zero active sessions.
+	return s.Working + s.PendingMR + s.Reservations
 }
 
 type polecatAdmissionReservation struct {
@@ -76,7 +81,7 @@ func (e *polecatCapacityAdmissionError) Error() string {
 		return fmt.Sprintf("polecat admission denied: %s", e.Reason)
 	}
 	return fmt.Sprintf(
-		"polecat admission denied: %s (max=%d occupied=%d working=%d recovery_blocked=%d reservations=%d reusable_idle=%d pending_mr=%d free=%d). Resolve recovery-needed polecats or raise scheduler.max_polecats; inspect with `gt scheduler status --json` or `gt polecat list --all --json`",
+		"polecat admission denied: %s (max=%d occupied=%d working=%d recovery_blocked=%d reservations=%d reusable_idle=%d pending_mr=%d free=%d). Resolve active/pending polecats or raise scheduler.max_polecats; inspect recovery debt with `gt polecat list --all --json`",
 		e.Reason,
 		e.Snapshot.Max,
 		e.Snapshot.occupied(),

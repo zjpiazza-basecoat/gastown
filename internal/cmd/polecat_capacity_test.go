@@ -319,6 +319,28 @@ func TestApplyAgentFieldsToCapacitySnapshotSeparatesPendingMR(t *testing.T) {
 	}
 }
 
+func TestCapacitySnapshotRecoveryDebtDoesNotConsumeSlots(t *testing.T) {
+	snapshot := polecatCapacitySnapshot{Max: 2, RecoveryBlocked: 28}
+	if got := snapshot.occupied(); got != 0 {
+		t.Fatalf("occupied with only recovery debt = %d, want 0", got)
+	}
+	snapshot.Free = snapshot.Max - snapshot.occupied()
+	if snapshot.Free != 2 {
+		t.Fatalf("free with only recovery debt = %d, want 2", snapshot.Free)
+	}
+}
+
+func TestCapacitySnapshotPendingMRConsumesSlots(t *testing.T) {
+	snapshot := polecatCapacitySnapshot{Max: 2, PendingMR: 1, RecoveryBlocked: 28}
+	if got := snapshot.occupied(); got != 1 {
+		t.Fatalf("occupied with pending MR and recovery debt = %d, want 1", got)
+	}
+	snapshot.Free = snapshot.Max - snapshot.occupied()
+	if snapshot.Free != 1 {
+		t.Fatalf("free with pending MR and recovery debt = %d, want 1", snapshot.Free)
+	}
+}
+
 func TestPrintDryRunPlanUsesCapacitySnapshot(t *testing.T) {
 	out := captureStdout(t, func() {
 		printDryRunPlan(capacity.DispatchPlan{
