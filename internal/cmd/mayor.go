@@ -12,7 +12,9 @@ import (
 	"github.com/steveyegge/gastown/internal/constants"
 	"github.com/steveyegge/gastown/internal/daemon"
 	"github.com/steveyegge/gastown/internal/doltserver"
+	"github.com/steveyegge/gastown/internal/gtcontext"
 	"github.com/steveyegge/gastown/internal/mayor"
+	"github.com/steveyegge/gastown/internal/remote"
 	"github.com/steveyegge/gastown/internal/session"
 	"github.com/steveyegge/gastown/internal/style"
 	"github.com/steveyegge/gastown/internal/tmux"
@@ -190,6 +192,12 @@ func runMayorStop(cmd *cobra.Command, args []string) error {
 }
 
 func runMayorAttach(cmd *cobra.Command, args []string) error {
+	if isRemote, remoteCtx, err := gtcontext.IsRemoteSelected(); err != nil {
+		return err
+	} else if isRemote {
+		return remote.Attach(remoteCtx, remote.AttachOptions{Kind: "mayor"})
+	}
+
 	mgr, err := getMayorManager()
 	if err != nil {
 		return err

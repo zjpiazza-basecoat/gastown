@@ -65,6 +65,8 @@ var beadsExemptCommands = map[string]bool{
 	"rig":           true,
 	"scheduler":     true,
 	"config":        true,
+	"context":       true,
+	"agent":         true,
 	"install":       true,
 	"tap":           true,
 	"dnd":           true,
@@ -86,6 +88,8 @@ var branchCheckExemptCommands = map[string]bool{
 	"help":        true,
 	"completion":  true,
 	"doctor":      true, // Used to fix the problem
+	"context":     true, // Context switching must work outside a town
+	"agent":       true, // In-cluster entrypoint; may run before town setup
 	"status-line": true, // tmux hot path; never run git freshness checks here
 	"estop":       true, // Emergency stop must always work
 	"thaw":        true, // Thaw must always work

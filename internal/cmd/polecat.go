@@ -12,8 +12,11 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/git"
+	"github.com/steveyegge/gastown/internal/gtcontext"
 	"github.com/steveyegge/gastown/internal/polecat"
+	"github.com/steveyegge/gastown/internal/remote"
 	"github.com/steveyegge/gastown/internal/rig"
+	"github.com/steveyegge/gastown/internal/session"
 	"github.com/steveyegge/gastown/internal/style"
 	"github.com/steveyegge/gastown/internal/tmux"
 	"github.com/steveyegge/gastown/internal/util"
@@ -111,6 +114,18 @@ Examples:
   gt polecat remove greenplace --all --force`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: runPolecatRemove,
+}
+
+var polecatAttachCmd = &cobra.Command{
+	Use:   "attach <rig>/<polecat>",
+	Short: "Attach to a polecat session",
+	Long: `Attach to a polecat session.
+
+In local mode this attaches to the local tmux session. In a remote context
+('gt context use <remote>') this connects to the configured in-cluster Town
+gateway, which attaches to tmux inside the polecat pod or sandbox.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runPolecatAttach,
 }
 
 var polecatStatusCmd = &cobra.Command{
@@ -370,6 +385,7 @@ func init() {
 	polecatCmd.AddCommand(polecatAddCmd)
 	polecatCmd.AddCommand(polecatRemoveCmd)
 	polecatCmd.AddCommand(polecatStatusCmd)
+	polecatCmd.AddCommand(polecatAttachCmd)
 	polecatCmd.AddCommand(polecatGitStateCmd)
 	polecatCmd.AddCommand(polecatCheckRecoveryCmd)
 	polecatCmd.AddCommand(polecatGCCmd)
@@ -379,6 +395,29 @@ func init() {
 	polecatCmd.AddCommand(polecatPoolInitCmd)
 
 	rootCmd.AddCommand(polecatCmd)
+}
+
+func runPolecatAttach(cmd *cobra.Command, args []string) error {
+	rigName, polecatName, err := parseRigPolecatArg(args[0])
+	if err != nil {
+		return err
+	}
+	if isRemote, remoteCtx, err := gtcontext.IsRemoteSelected(); err != nil {
+		return err
+	} else if isRemote {
+		return remote.Attach(remoteCtx, remote.AttachOptions{Kind: "polecat", Rig: rigName, Name: polecatName})
+	}
+
+	sessionID := session.PolecatSessionName(session.PrefixFor(rigName), polecatName)
+	return attachToTmuxSession(sessionID)
+}
+
+func parseRigPolecatArg(arg string) (string, string, error) {
+	parts := strings.Split(arg, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("expected <rig>/<polecat>, got %q", arg)
+	}
+	return parts[0], parts[1], nil
 }
 
 // PolecatListItem represents a polecat in list output.
