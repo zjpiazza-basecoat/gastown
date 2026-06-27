@@ -43,6 +43,21 @@ func TestDecideWorkstateCanonicalFields(t *testing.T) {
 			in:   WorkstateInput{State: StateWorking, CleanupStatus: CleanupClean},
 			want: WorkstateDisposition{Verdict: WorkstateVerdictWorking, Reason: "not-idle", NeedsRecovery: false, CountsTowardCapacity: true},
 		},
+		{
+			name: "stale working with terminal assignment falls through to reusable",
+			in:   WorkstateInput{State: StateWorking, CleanupStatus: CleanupClean, AssignedBeadTerminal: true, Branch: "main"},
+			want: WorkstateDisposition{Verdict: WorkstateVerdictSafeToNuke, Reason: "reusable", Reusable: true, SafeToNuke: true, ReuseStatus: "idle-clean"},
+		},
+		{
+			name: "stale working with terminal assignment still preserves open active mr",
+			in:   WorkstateInput{State: StateWorking, CleanupStatus: CleanupClean, AssignedBeadTerminal: true, ActiveMR: "gt-mr-open", ActiveMRBlocker: "active_mr=gt-mr-open status=open"},
+			want: WorkstateDisposition{Verdict: WorkstateVerdictPendingMR, Reason: "active-mr-open", ReuseStatus: "idle-pr-open"},
+		},
+		{
+			name: "stale working with terminal assignment still blocks dirty cleanup",
+			in:   WorkstateInput{State: StateWorking, CleanupStatus: CleanupUncommitted, AssignedBeadTerminal: true},
+			want: WorkstateDisposition{Verdict: WorkstateVerdictNeedsRecovery, Reason: "cleanup-has_uncommitted", NeedsRecovery: true, CountsTowardCapacity: true, ReuseStatus: "idle-recovery-needed"},
+		},
 	}
 
 	for _, tt := range tests {

@@ -56,17 +56,26 @@ type WorkstateDisposition struct {
 // DecideWorkstate returns the canonical disposition for a polecat.
 func DecideWorkstate(in WorkstateInput) WorkstateDisposition {
 	if in.State != StateIdle {
-		verdict := WorkstateVerdictNeedsRecovery
-		needsRecovery := true
-		if in.State == StateWorking {
-			verdict = WorkstateVerdictWorking
-			needsRecovery = false
-		}
-		return WorkstateDisposition{
-			Verdict:              verdict,
-			Reason:               "not-idle",
-			NeedsRecovery:        needsRecovery,
-			CountsTowardCapacity: true,
+		// A live/running session with an open assignment is active work and must
+		// count toward capacity. Once the assigned/source bead is terminal, though,
+		// the session state can be stale: gt done/refinery/witness failures often
+		// leave a tmux session running while all durable predicates prove there is
+		// no work at risk. In that terminal case, fall through to the same cleanup,
+		// git, active-MR, and MQ predicates used for idle polecats so list,
+		// scheduler, steward, and check-recovery do not disagree indefinitely.
+		if !(in.State == StateWorking && in.AssignedBeadTerminal) {
+			verdict := WorkstateVerdictNeedsRecovery
+			needsRecovery := true
+			if in.State == StateWorking {
+				verdict = WorkstateVerdictWorking
+				needsRecovery = false
+			}
+			return WorkstateDisposition{
+				Verdict:              verdict,
+				Reason:               "not-idle",
+				NeedsRecovery:        needsRecovery,
+				CountsTowardCapacity: true,
+			}
 		}
 	}
 
