@@ -1265,6 +1265,9 @@ func (b *Beads) Show(id string) (*Issue, error) {
 
 	out, err := b.run("show", id, "--json")
 	if err != nil {
+		if issue, ephErr := b.showEphemeral(id); ephErr == nil {
+			return issue, nil
+		}
 		return nil, err
 	}
 
@@ -1275,9 +1278,28 @@ func (b *Beads) Show(id string) (*Issue, error) {
 	}
 
 	if len(issues) == 0 {
-		return nil, ErrNotFound
+		return b.showEphemeral(id)
 	}
 
+	return issues[0], nil
+}
+
+func (b *Beads) showEphemeral(id string) (*Issue, error) {
+	out, err := b.run("query", "--json", "ephemeral=true AND id="+quoteBDQueryValue(id), "--limit=1")
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 || !isJSONBytes(out) {
+		return nil, ErrNotFound
+	}
+	var issues []*Issue
+	if err := json.Unmarshal(out, &issues); err != nil {
+		return nil, fmt.Errorf("parsing bd query output: %w", err)
+	}
+	if len(issues) == 0 {
+		return nil, ErrNotFound
+	}
+	issues[0].Ephemeral = true
 	return issues[0], nil
 }
 
