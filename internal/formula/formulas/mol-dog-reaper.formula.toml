@@ -46,7 +46,14 @@ The Dog should watch for and flag:
 NOT anomalies (do NOT escalate these):
 - Scan/reap count mismatch (scan finds N, reap closes M < N): this is a benign
   race condition — the witness closes wisps for dead sessions concurrently.
-  This is expected behavior, not a bug."""
+  This is expected behavior, not a bug.
+- Null/empty scan results from databases that do not have reaper-managed tables
+  (for example camera_bridge, one, or site returning null because they have no
+  beads/wisps schema). Record these in the report, but do not escalate.
+- The known null-scan condition tracked by gt-lb3jt / hq-cv-m76mq. Escalate it
+  again only if the fingerprint changes, affected databases change, counts jump
+  materially, destructive cleanup would be required, or the tracking convoy/issue
+  disappears."""
 formula = "mol-dog-reaper"
 version = 3
 
@@ -214,12 +221,22 @@ Generate summary and signal completion.
 **Anomalies**: (list any anomalies found)
 ```
 
-**2. If anomalies were found, escalate:**
+**2. If anomalies were found, escalate only when actionable:**
 ```bash
 gt escalate "Reaper anomalies detected" -s MEDIUM -m "<anomaly details>"
 ```
 
-**Exit criteria:** Report generated, anomalies escalated if any."""
+Before escalating, suppress known/non-actionable anomalies:
+- Do not escalate null/empty results for databases without reaper-managed tables;
+  record them as `known/no-op` in the report.
+- Do not repeat-escalate the gt-lb3jt / hq-cv-m76mq null-scan condition while
+  that tracking issue/convoy is active and the affected DBs/counts are materially
+  unchanged.
+- Escalate only new fingerprints, material count changes, untracked affected DBs,
+  Dolt commit failures, dangling parent references, threshold breaches, or cases
+  requiring destructive cleanup/Mayor approval.
+
+**Exit criteria:** Report generated, actionable anomalies escalated, known tracked anomalies recorded without mail/escalation spam."""
 
 [vars]
 [vars.max_age]
