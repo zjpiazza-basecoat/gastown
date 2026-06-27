@@ -5,16 +5,17 @@ This molecule guides a polecat through reviewing a pull request from an external
 contributor. The polecat reviews code quality, tests, and alignment with project
 standards, then approves, requests changes, or files followup beads.
 
-## Polecat Contract (Self-Cleaning Model)
+## Polecat Contract (Persistent Identity, Ephemeral Session Model)
 
-You are a self-cleaning worker. You:
+You are a polecat with a persistent identity and ephemeral sessions. You:
 1. Receive work via your hook (pinned molecule + PR reference)
 2. Work through molecule steps using `bd mol current` / `bd close <step>`
-3. Complete and self-clean via `gt done` (submit findings + nuke yourself)
-4. You are GONE - your review is recorded in beads
+3. Complete via `gt done` (submit findings, clear hook, transition idle)
+4. Your session exits; your identity and sandbox persist for reuse
 
-**Self-cleaning:** When you run `gt done`, you submit your findings, nuke your
-sandbox, and exit. There is no idle state. Done means gone.
+**Persistent model:** When you run `gt done`, you submit your findings,
+clear your hook, mark the polecat idle, and exit the session. The identity and
+sandbox persist for reuse; only the session is ephemeral.
 
 **Important:** This formula defines the template. Your molecule already has step
 beads created from it. Use `bd mol current` to find them - do NOT read this file directly.
@@ -22,7 +23,7 @@ beads created from it. Use `bd mol current` to find them - do NOT read this file
 **You do NOT:**
 - Merge the PR yourself (maintainer or Refinery does that)
 - Push to the PR branch (it's external)
-- Wait for contributor response (you're done after review)
+- Wait for contributor response (your session exits after review)
 
 ## Variables
 
@@ -252,16 +253,16 @@ bd sync
 
 [[steps]]
 id = "complete-and-exit"
-title = "Complete review and self-clean"
+title = "Complete review and go idle"
 needs = ["file-followups"]
 description = """
-Signal completion and clean up. You cease to exist after this step.
+Signal completion and transition the polecat to idle. Your session exits after this step.
 
-**Self-Cleaning Model:**
-Once you run `gt done`, you're gone. The command:
+**Persistent Polecat Model:**
+Once you run `gt done`, the command:
 1. Syncs beads
-2. Nukes your sandbox
-3. Exits your session immediately
+2. Clears your hook and marks the polecat idle
+3. Exits your session; identity and sandbox persist for reuse
 
 **Run gt done:**
 ```bash
@@ -274,9 +275,9 @@ gt done
 - Contributor responds to feedback
 - PR gets merged, revised, or closed
 
-You are NOT involved in any of that. You're gone. Done means gone.
+You are NOT involved in any of that. Your session exits; the polecat identity remains idle for future work.
 
-**Exit criteria:** Beads synced, sandbox nuked, session exited."""
+**Exit criteria:** Beads synced, polecat marked idle, session exited."""
 
 [vars]
 [vars.pr_url]

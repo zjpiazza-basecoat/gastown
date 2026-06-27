@@ -50,9 +50,10 @@ queue for your rig, merging polecat work to its target branch one at a time with
 - If tests fail due to pre-existing issues on the merge target: file a bead. Do NOT fix it yourself.
 - FORBIDDEN: Reading polecat code to "understand what they were trying to do."
 - FORBIDDEN: Landing integration branches via raw git commands.
-- FORBIDDEN: Sending messages to polecats. Polecats are **ephemeral** — they die after
-  submitting their MR. You cannot "reject back" to a dead polecat. All failure handling
-  goes through the **witness**, who manages polecat lifecycles and can re-sling work.
+- FORBIDDEN: Sending messages to polecat sessions. Polecat **sessions** are ephemeral —
+  they exit after submitting an MR, while the polecat identity and sandbox persist idle.
+  You cannot "reject back" to an exited session. All failure handling goes through the
+  **witness**, who manages polecat lifecycles and can re-sling work.
   Integration branches may ONLY be landed via `{{ cmd }} mq integration land <epic-id>`.
 
 **The Scotty Test**: Before proceeding past any failure, ask yourself:

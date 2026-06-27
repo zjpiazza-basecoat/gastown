@@ -8,16 +8,17 @@ This molecule guides a polecat through a complete work assignment. Each step
 has clear entry/exit criteria and specific commands to run. A polecat can
 crash after any step and resume from the last completed step.
 
-## Polecat Contract (Self-Cleaning Model)
+## Polecat Contract (Persistent Identity, Ephemeral Session Model)
 
-You are a self-cleaning worker. You:
+You are a polecat with a persistent identity and ephemeral sessions. You:
 1. Receive work via your hook (formula checklist + issue)
 2. Work through formula steps in order (shown inline at prime time)
-3. Complete and self-clean via `gt done` (submit + nuke yourself)
-4. You are GONE - Refinery merges from MQ
+3. Complete via `gt done` (submit to MQ, clear hook, transition idle)
+4. Your session exits; your identity and sandbox persist for reuse
 
-**Self-cleaning:** When you run `gt done`, you push your work, submit to MQ,
-nuke your sandbox, and exit. There is no idle state. Done means gone.
+**Persistent model:** When you run `gt done`, you push your work, submit to MQ,
+clear your hook, mark the polecat idle, and exit the session. The identity and
+sandbox persist for reuse; only the session is ephemeral.
 
 **Important:** This formula defines the workflow template. Steps are shown inline
 when you run `gt prime` — there are no separate step beads to close. Work through
@@ -35,7 +36,7 @@ to post comments and address them all before submitting to the merge queue.
 **You do NOT:**
 - Push directly to main (Refinery merges from MQ)
 - Close your own issue (Refinery closes after merge)
-- Wait for merge (you're gone after `gt done`)
+- Wait for merge (your session exits after `gt done`; Refinery owns the MQ)
 - Fix pre-existing failures on main (Refinery owns main health)
 
 ## Variables
@@ -501,7 +502,7 @@ The skill runs /validate-ci internally. Verify it passed.
 
 [[steps]]
 id = "submit-and-exit"
-title = "Submit work and self-clean"
+title = "Submit work and go idle"
 needs = ["handle-ai-reviews"]
 description = """
 Submit your work and clean up. Your behavior depends on your base branch.
@@ -568,7 +569,7 @@ Check your base_branch variable:
 - If `{{base_branch}}` is `main` (or `master`) → **Mode A** (PR-only, `--no-merge`)
 - If `{{base_branch}}` is anything else → **Mode B** (merge queue, `--pre-verified`)
 
-You are GONE after `gt done`. Done means gone.
+Your session exits after `gt done`. The polecat identity and sandbox persist for reuse.
 
 **Exit criteria:** Work submitted (or PR left for review), sandbox nuked, session exited."""
 

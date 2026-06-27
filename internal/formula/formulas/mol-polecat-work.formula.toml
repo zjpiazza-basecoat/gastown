@@ -5,16 +5,17 @@ This molecule guides a polecat through a complete work assignment. Each step
 has clear entry/exit criteria and specific commands to run. A polecat can
 crash after any step and resume from the last completed step.
 
-## Polecat Contract (Self-Cleaning Model)
+## Polecat Contract (Persistent Identity, Ephemeral Session Model)
 
-You are a self-cleaning worker. You:
+You are a polecat with a persistent identity and ephemeral sessions. You:
 1. Receive work via your hook (formula checklist + issue)
 2. Work through formula steps in order (shown inline at prime time)
-3. Complete and self-clean via `gt done` (submit + nuke yourself)
-4. You are GONE - Refinery merges from MQ
+3. Complete via `gt done` (submit to MQ, clear hook, transition idle)
+4. Your session exits; your identity and sandbox persist for reuse
 
-**Self-cleaning:** When you run `gt done`, you push your work, submit to MQ,
-nuke your sandbox, and exit. There is no idle state. Done means gone.
+**Persistent model:** When you run `gt done`, you push your work, submit to MQ,
+clear your hook, mark the polecat idle, and exit the session. The identity and
+sandbox persist for reuse; only the session is ephemeral.
 
 **Important:** This formula defines the workflow template. Steps are shown inline
 when you run `gt prime` — there are no separate step beads to close. Work through
@@ -28,7 +29,7 @@ stale, the refinery falls through to normal gate execution.
 **You do NOT:**
 - Push directly to main (Refinery merges from MQ)
 - Close your own issue (Refinery closes after merge)
-- Wait for merge (you're gone after `gt done`)
+- Wait for merge (your session exits after `gt done`; Refinery owns the MQ)
 - Fix pre-existing failures on main (Refinery owns main health)
 
 ## Variables
@@ -498,17 +499,17 @@ The refinery will run gates normally (slower but still correct).
 
 [[steps]]
 id = "submit-and-exit"
-title = "Submit work and self-clean"
+title = "Submit work and go idle"
 needs = ["pre-verify"]
 description = """
-Submit your work and clean up. You cease to exist after this step.
+Submit your work and transition the polecat to idle. Your session exits after this step.
 
-**Self-Cleaning Model:**
-Once you run `gt done`, you're gone. The command:
+**Persistent Polecat Model:**
+Once you run `gt done`, the command:
 1. Pushes your branch to origin
 2. Creates an MR bead in the merge queue
-3. Nukes your sandbox (worktree removal)
-4. Exits your session immediately
+3. Clears your hook and marks the polecat idle
+4. Exits your session; identity and sandbox persist for reuse
 
 **Pre-flight: Verify you have actual work to submit (HARD GATE):**
 ```bash
@@ -536,8 +537,8 @@ You should see output like:
   Source: polecat/<name>
   Target: {{base_branch}}
   Issue: {{issue}}
-✓ Sandbox nuked
-✓ Session exiting
+✓ Polecat marked idle
+✓ Session exiting (identity and sandbox preserved)
 ```
 
 **What happens next (not your concern):**
@@ -547,9 +548,9 @@ You should see output like:
 - Refinery fixes failures itself (inline or via helper polecats)
 - Refinery closes your issue after successful merge
 
-You are NOT involved in any of that. You're gone. Done means gone.
+You are NOT involved in any of that. Your session exits; the polecat identity remains idle for future work.
 
-**Exit criteria:** Work submitted, sandbox nuked, session exited."""
+**Exit criteria:** Work submitted, polecat marked idle, session exited."""
 
 [vars]
 [vars.issue]

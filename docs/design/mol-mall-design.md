@@ -112,7 +112,7 @@ GET /formulas/{name}/{version}
     checksum: sha256:abc123...
     signature: <optional PGP signature>
     content: <base64 or URL to .formula.toml>
-    changelog: "Added self-cleaning model..."
+    changelog: "Added persistent polecat completion model..."
     published_at: 2026-01-10T00:00:00Z
 
 POST /formulas

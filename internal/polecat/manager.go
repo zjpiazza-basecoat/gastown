@@ -1174,7 +1174,7 @@ func (m *Manager) RemoveWithOptions(name string, force, nuclear, selfNuke bool) 
 	}
 
 	// Even nuclear mode must not delete worktrees with unmerged MRs.
-	// The nuclear flag bypasses git-status checks (needed for self-nuke)
+	// The nuclear flag bypasses git-status checks for explicit operator cleanup,
 	// but MR status is a higher-level concern that should always be checked.
 	if !force {
 		agentID := m.agentBeadID(name)

@@ -64,17 +64,18 @@ formula checklist (from `mol-polecat-work`, shown inline at prime time) and sign
 
 1. Receive work via your hook (formula checklist + issue)
 2. Work through formula steps in order (shown inline at prime time)
-3. Complete and self-clean (`gt done`) — you exit AND nuke yourself
+3. Complete (`gt done`) — submit work, clear hook, transition idle, exit session
 4. Refinery merges your work from the MQ
 
-**Self-cleaning model:** `gt done` pushes your branch, submits to MQ, nukes sandbox, exits session.
+**Persistent model:** `gt done` pushes your branch, submits to MQ, clears your hook, marks the polecat idle, and exits the session. Your identity and sandbox persist for reuse.
 
-**Three operating states:**
+**Four operating states:**
 - **Working** — actively doing assigned work (normal)
+- **Idle** — work completed, session exited, sandbox preserved for reuse
 - **Stalled** — session stopped mid-work (failure)
 - **Zombie** — `gt done` failed during cleanup (failure)
 
-Done means gone. Run `gt prime` to see your formula steps.
+Done means idle. Run `gt prime` to see your formula steps.
 
 **You do NOT:**
 - Push directly to main (Refinery merges after Witness verification)
@@ -93,7 +94,7 @@ Your work is defined by the attached formula. Steps are shown inline at prime ti
 gt hook                  # What's on my hook?
 gt prime                 # Shows formula checklist
 # Work through steps in order, then:
-gt done                  # Submit and self-clean
+gt done                  # Submit, go idle, exit session
 ```
 
 ---
@@ -238,7 +239,7 @@ When your work is done, follow this checklist — **step 4 is REQUIRED**:
        - Go projects:  go test ./... && go vet ./...
 [ ] 2. Stage changes:     git add <files>
 [ ] 3. Commit changes:    git commit -m "msg (issue-id)"
-[ ] 4. Self-clean:        gt done   ← MANDATORY FINAL STEP
+[ ] 4. Submit/go idle:    gt done   ← MANDATORY FINAL STEP
 ```
 
 **Quality gates are not optional.** Worktrees may not trigger pre-commit hooks,
@@ -249,8 +250,9 @@ the project's definition of done. Many projects require a specific test harness
 (not just `go test` or `dotnet test`). If AGENTS.md exists, its "Core rule"
 section defines what "done" means for this project.
 
-The `gt done` command pushes your branch, creates an MR bead in the MQ, nukes
-your sandbox, and exits your session. **You are gone after `gt done`.**
+The `gt done` command pushes your branch, creates an MR bead in the MQ, clears
+your hook, marks the polecat idle, and exits your session. **Your identity and
+sandbox persist for reuse after `gt done`.**
 
 ### Do NOT Push Directly to Main
 

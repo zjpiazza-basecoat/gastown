@@ -851,7 +851,7 @@ See Section 2 above for the full definition.
 | Beads (Dolt) | Durable ledger — AT tasks are ephemeral |
 | gt mail | Cross-rig communication — AT is team-scoped |
 | Molecules/formulas | Work templates — AT tasks created from these |
-| `gt done` | Polecat self-clean — unchanged lifecycle |
+| `gt done` | Polecat submit/go-idle — unchanged lifecycle |
 | Git worktrees | Filesystem isolation — AT doesn't provide this |
 | Daemon/Boot/Deacon | Health monitoring — AT has no crash recovery |
 | Refinery (separate) | Different lifecycle (Phase 2 brings it in-band) |

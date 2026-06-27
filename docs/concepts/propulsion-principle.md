@@ -43,7 +43,7 @@ Formula steps are shown inline at prime time — no step beads to manage:
 ```bash
 gt prime             # See your checklist
 # Work through each step in order
-gt done              # Submit and self-clean (polecats)
+gt done              # Submit, go idle, and exit session (polecats)
 gt patrol report     # Close + next cycle (patrol agents)
 ```
 
