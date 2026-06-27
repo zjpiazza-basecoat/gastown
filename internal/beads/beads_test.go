@@ -77,6 +77,37 @@ func TestListEphemeralQuotesQueryValuesAndDisablesLimit(t *testing.T) {
 	}
 }
 
+func TestShowFallsBackToEphemeralWisp(t *testing.T) {
+	stubDir := t.TempDir()
+	stubScript := `#!/bin/sh
+if [ "$1" = "show" ]; then
+  printf '[]\n'
+  exit 0
+fi
+if [ "$1" = "query" ]; then
+  case "$3" in
+    *'id="hq-wisp-abc"'*) printf '[{"id":"hq-wisp-abc","title":"patrol","status":"hooked","priority":2,"labels":[],"ephemeral":true}]\n'; exit 0 ;;
+  esac
+fi
+echo "unexpected bd args: $@" >&2
+exit 2
+`
+	stubPath := filepath.Join(stubDir, "bd")
+	if err := os.WriteFile(stubPath, []byte(stubScript), 0755); err != nil {
+		t.Fatalf("write bd stub: %v", err)
+	}
+	t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	workDir := t.TempDir()
+	issue, err := New(workDir).Show("hq-wisp-abc")
+	if err != nil {
+		t.Fatalf("Show: %v", err)
+	}
+	if issue.ID != "hq-wisp-abc" || !issue.Ephemeral {
+		t.Fatalf("unexpected issue: %#v", issue)
+	}
+}
+
 // TestCreateOptions verifies CreateOptions fields.
 func TestCreateOptions(t *testing.T) {
 	opts := CreateOptions{
