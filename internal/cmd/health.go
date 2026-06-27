@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/gastown/internal/doltserver"
 	"github.com/steveyegge/gastown/internal/health"
+	"github.com/steveyegge/gastown/internal/scheduler/capacity"
 	"github.com/steveyegge/gastown/internal/style"
 	"github.com/steveyegge/gastown/internal/workspace"
 )
@@ -25,26 +26,27 @@ var (
 
 // HealthReport is the machine-readable output of gt health --json.
 type HealthReport struct {
-	Timestamp string              `json:"timestamp"`
-	Server    *ServerHealth       `json:"server"`
-	Databases []DatabaseHealth    `json:"databases"`
-	Pollution []PollutionRecord   `json:"pollution,omitempty"`
-	Backups   *BackupHealth       `json:"backups"`
-	Processes *ProcessHealth      `json:"processes"`
-	Orphans   []OrphanDB          `json:"orphans,omitempty"`
+	Timestamp string            `json:"timestamp"`
+	Server    *ServerHealth     `json:"server"`
+	Databases []DatabaseHealth  `json:"databases"`
+	Pollution []PollutionRecord `json:"pollution,omitempty"`
+	Backups   *BackupHealth     `json:"backups"`
+	Processes *ProcessHealth    `json:"processes"`
+	Scheduler *SchedulerHealth  `json:"scheduler"`
+	Orphans   []OrphanDB        `json:"orphans,omitempty"`
 }
 
 type ServerHealth struct {
-	Running            bool    `json:"running"`
-	PID                int     `json:"pid,omitempty"`
-	Port               int     `json:"port,omitempty"`
-	LatencyMs          int64   `json:"latency_ms,omitempty"`
-	Connections        int     `json:"connections,omitempty"`
-	MaxConnections     int     `json:"max_connections,omitempty"`
-	DiskUsageBytes     int64   `json:"disk_usage_bytes,omitempty"`
-	DiskUsageHuman     string  `json:"disk_usage_human,omitempty"`
-	LastCommitAgeSec   float64 `json:"last_commit_age_seconds,omitempty"`
-	LastCommitDB       string  `json:"last_commit_db,omitempty"`
+	Running          bool    `json:"running"`
+	PID              int     `json:"pid,omitempty"`
+	Port             int     `json:"port,omitempty"`
+	LatencyMs        int64   `json:"latency_ms,omitempty"`
+	Connections      int     `json:"connections,omitempty"`
+	MaxConnections   int     `json:"max_connections,omitempty"`
+	DiskUsageBytes   int64   `json:"disk_usage_bytes,omitempty"`
+	DiskUsageHuman   string  `json:"disk_usage_human,omitempty"`
+	LastCommitAgeSec float64 `json:"last_commit_age_seconds,omitempty"`
+	LastCommitDB     string  `json:"last_commit_db,omitempty"`
 }
 
 type DatabaseHealth struct {
@@ -64,17 +66,29 @@ type PollutionRecord struct {
 }
 
 type BackupHealth struct {
-	DoltFreshness  string `json:"dolt_freshness,omitempty"`
-	DoltAgeSeconds int    `json:"dolt_age_seconds,omitempty"`
-	DoltStale      bool   `json:"dolt_stale"`
-	JSONLFreshness string `json:"jsonl_freshness,omitempty"`
-	JSONLAgeSeconds int   `json:"jsonl_age_seconds,omitempty"`
-	JSONLStale     bool   `json:"jsonl_stale"`
+	DoltFreshness   string `json:"dolt_freshness,omitempty"`
+	DoltAgeSeconds  int    `json:"dolt_age_seconds,omitempty"`
+	DoltStale       bool   `json:"dolt_stale"`
+	JSONLFreshness  string `json:"jsonl_freshness,omitempty"`
+	JSONLAgeSeconds int    `json:"jsonl_age_seconds,omitempty"`
+	JSONLStale      bool   `json:"jsonl_stale"`
 }
 
 type ProcessHealth struct {
 	ZombieCount int   `json:"zombie_count"`
 	ZombiePIDs  []int `json:"zombie_pids,omitempty"`
+}
+
+type SchedulerHealth struct {
+	Paused             bool                    `json:"paused"`
+	PausedBy           string                  `json:"paused_by,omitempty"`
+	QueuedTotal        int                     `json:"queued_total"`
+	QueuedReady        int                     `json:"queued_ready"`
+	Capacity           polecatCapacitySnapshot `json:"capacity"`
+	LastDispatchAt     string                  `json:"last_dispatch_at,omitempty"`
+	LastDispatchAgeSec int                     `json:"last_dispatch_age_seconds,omitempty"`
+	Stalled            bool                    `json:"stalled"`
+	StallReason        string                  `json:"stall_reason,omitempty"`
 }
 
 type OrphanDB struct {
@@ -133,7 +147,10 @@ func runHealth(cmd *cobra.Command, args []string) error {
 	// 5. Processes
 	report.Processes = checkProcessHealth(report.Server.Port)
 
-	// 6. Orphans
+	// 6. Scheduler
+	report.Scheduler = checkSchedulerHealth(townRoot)
+
+	// 7. Orphans
 	report.Orphans = checkOrphanDBs(townRoot)
 
 	if healthJSON {
@@ -327,6 +344,54 @@ func checkProcessHealth(expectedPort int) *ProcessHealth {
 	}
 }
 
+func checkSchedulerHealth(townRoot string) *SchedulerHealth {
+	state, err := capacity.LoadState(townRoot)
+	if err != nil {
+		return &SchedulerHealth{Stalled: true, StallReason: fmt.Sprintf("scheduler state unavailable: %v", err)}
+	}
+
+	scheduled := listScheduledBeads(townRoot)
+	snapshot, err := polecatCapacitySnapshotForTown(townRoot)
+	if err != nil {
+		return &SchedulerHealth{Stalled: true, StallReason: fmt.Sprintf("scheduler capacity unavailable: %v", err)}
+	}
+
+	sh := &SchedulerHealth{
+		Paused:         state.Paused,
+		PausedBy:       state.PausedBy,
+		QueuedTotal:    len(scheduled),
+		Capacity:       snapshot,
+		LastDispatchAt: state.LastDispatchAt,
+	}
+	for _, b := range scheduled {
+		if !b.Blocked {
+			sh.QueuedReady++
+		}
+	}
+	if state.LastDispatchAt != "" {
+		if last, err := time.Parse(time.RFC3339, state.LastDispatchAt); err == nil {
+			sh.LastDispatchAgeSec = int(time.Since(last).Seconds())
+		}
+	}
+	evaluateSchedulerStall(sh, 5*time.Minute)
+	return sh
+}
+
+func evaluateSchedulerStall(sh *SchedulerHealth, threshold time.Duration) {
+	if sh == nil || sh.Stalled || sh.Paused || sh.QueuedReady == 0 || sh.Capacity.Free <= 0 {
+		return
+	}
+	if sh.LastDispatchAt == "" {
+		sh.Stalled = true
+		sh.StallReason = "ready queued work with free polecat capacity and no recorded dispatch"
+		return
+	}
+	if time.Duration(sh.LastDispatchAgeSec)*time.Second > threshold {
+		sh.Stalled = true
+		sh.StallReason = fmt.Sprintf("ready queued work with %d free polecat slot(s); last dispatch %s ago", sh.Capacity.Free, (time.Duration(sh.LastDispatchAgeSec) * time.Second).Round(time.Second))
+	}
+}
+
 func checkOrphanDBs(townRoot string) []OrphanDB {
 	orphans, err := doltserver.FindOrphanedDatabases(townRoot)
 	if err != nil {
@@ -411,7 +476,27 @@ func printHealthReport(r *HealthReport) {
 			r.Processes.ZombieCount, r.Processes.ZombiePIDs)
 	}
 
-	// 6. Orphans
+	// 6. Scheduler
+	fmt.Printf("\n%s Scheduler\n", style.Bold.Render("●"))
+	if r.Scheduler == nil {
+		fmt.Printf("  %s unavailable\n", style.Bold.Render("!"))
+	} else {
+		state := "active"
+		if r.Scheduler.Paused {
+			state = "paused"
+		}
+		icon := style.Bold.Render("✓")
+		if r.Scheduler.Stalled {
+			icon = style.Bold.Render("!")
+		}
+		fmt.Printf("  %s %s: %d queued (%d ready), %d free of %d\n",
+			icon, state, r.Scheduler.QueuedTotal, r.Scheduler.QueuedReady, r.Scheduler.Capacity.Free, r.Scheduler.Capacity.Max)
+		if r.Scheduler.StallReason != "" {
+			fmt.Printf("    %s\n", r.Scheduler.StallReason)
+		}
+	}
+
+	// 7. Orphans
 	fmt.Printf("\n%s Orphan DBs\n", style.Bold.Render("●"))
 	if len(r.Orphans) == 0 {
 		fmt.Printf("  %s None\n", style.Bold.Render("✓"))
