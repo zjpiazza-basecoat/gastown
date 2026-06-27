@@ -129,7 +129,7 @@ func commandsInherited(workDir string) bool {
 		return false
 	}
 
-	gitRoot := gitRootOf(workDir)
+	gitRoot := gitRootOfWithin(workDir, townRoot)
 	if gitRoot != "" && !samePath(gitRoot, townRoot) {
 		return false
 	}
@@ -148,9 +148,21 @@ func samePath(a, b string) bool {
 // gitRootOf walks up from dir to find the nearest ancestor directory containing
 // a .git entry (file or directory). Returns empty string if none found.
 func gitRootOf(dir string) string {
+	return gitRootOfWithin(dir, "")
+}
+
+func gitRootOfWithin(dir, stopDir string) string {
+	stop := ""
+	if stopDir != "" {
+		stop, _ = filepath.Abs(stopDir)
+	}
 	for d := dir; ; d = filepath.Dir(d) {
+		absD, _ := filepath.Abs(d)
 		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
 			return d
+		}
+		if stop != "" && filepath.Clean(absD) == filepath.Clean(stop) {
+			return ""
 		}
 		parent := filepath.Dir(d)
 		if parent == d {

@@ -1821,17 +1821,31 @@ func TestNudgeSession_WakesAgentWindowNotActiveWindow(t *testing.T) {
 		t.Fatalf("SetEnvironment GT_PANE_ID: %v", err)
 	}
 
+	agentWindowOut, err := tm.run("display-message", "-p", "-t", agentPane, "#{window_index}")
+	if err != nil {
+		t.Fatalf("agent window index: %v", err)
+	}
+	agentWindow := sessionName + ":" + strings.TrimSpace(agentWindowOut)
+
 	// Open a second window, which tmux makes the active window. This puts the
 	// agent's pane in a non-active window — the scenario that exposed the bug.
 	if _, err := tm.run("new-window", "-t", sessionName, "-n", "feed"); err != nil {
 		t.Fatalf("new-window: %v", err)
 	}
+	activeWindowOut, err := tm.run("display-message", "-p", "-t", sessionName, "#{window_index}")
+	if err != nil {
+		t.Fatalf("active window index: %v", err)
+	}
+	activeWindow := sessionName + ":" + strings.TrimSpace(activeWindowOut)
+	if activeWindow == agentWindow {
+		t.Fatalf("new-window did not switch active window: agent=%s active=%s", agentWindow, activeWindow)
+	}
 
 	// Pre-set both windows to window-size "manual". The wake resets only the
 	// window it targets back to "latest", giving us a deterministic signal.
-	for _, win := range []string{":0", ":1"} {
-		if _, err := tm.run("set-option", "-w", "-t", sessionName+win, "window-size", "manual"); err != nil {
-			t.Fatalf("set-option window-size manual on %s: %v", sessionName+win, err)
+	for _, win := range []string{agentWindow, activeWindow} {
+		if _, err := tm.run("set-option", "-w", "-t", win, "window-size", "manual"); err != nil {
+			t.Fatalf("set-option window-size manual on %s: %v", win, err)
 		}
 	}
 
@@ -1840,9 +1854,9 @@ func TestNudgeSession_WakesAgentWindowNotActiveWindow(t *testing.T) {
 	}
 
 	windowSize := func(win string) string {
-		out, err := tm.run("show-options", "-w", "-t", sessionName+win, "window-size")
+		out, err := tm.run("show-options", "-w", "-t", win, "window-size")
 		if err != nil {
-			t.Fatalf("show-options window-size on %s: %v", sessionName+win, err)
+			t.Fatalf("show-options window-size on %s: %v", win, err)
 		}
 		fields := strings.Fields(strings.TrimSpace(out))
 		if len(fields) < 2 {
@@ -1851,12 +1865,12 @@ func TestNudgeSession_WakesAgentWindowNotActiveWindow(t *testing.T) {
 		return fields[1]
 	}
 
-	// Agent window (0) must have been woken; active window (1) must be untouched.
-	if got := windowSize(":0"); got != "latest" {
-		t.Errorf("agent window (0) window-size = %q, want %q (agent's window was not woken)", got, "latest")
+	// Agent window must have been woken; active non-agent window must be untouched.
+	if got := windowSize(agentWindow); got != "latest" {
+		t.Errorf("agent window %s window-size = %q, want %q (agent's window was not woken)", agentWindow, got, "latest")
 	}
-	if got := windowSize(":1"); got != "manual" {
-		t.Errorf("active window (1) window-size = %q, want %q (wrong window was woken)", got, "manual")
+	if got := windowSize(activeWindow); got != "manual" {
+		t.Errorf("active window %s window-size = %q, want %q (wrong window was woken)", activeWindow, got, "manual")
 	}
 }
 

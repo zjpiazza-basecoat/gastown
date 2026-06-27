@@ -18,6 +18,7 @@ import (
 	"github.com/steveyegge/gastown/internal/doltserver"
 	"github.com/steveyegge/gastown/internal/health"
 	"github.com/steveyegge/gastown/internal/session"
+	"github.com/steveyegge/gastown/internal/stewardhealth"
 	"github.com/steveyegge/gastown/internal/style"
 	"github.com/steveyegge/gastown/internal/tmux"
 	"github.com/steveyegge/gastown/internal/workspace"
@@ -162,6 +163,24 @@ apply upgrades. On a green candidate, it sends Mayor mail telling the human that
 	RunE: runStewardValidateUpgrade,
 }
 
+var stewardHealthCmd = &cobra.Command{
+	Use:   "health",
+	Short: "Query durable Steward health history",
+	RunE:  requireSubcommand,
+}
+
+var stewardHealthReportCmd = &cobra.Command{
+	Use:   "report",
+	Short: "Report Gas Town health trends from the durable ledger",
+	RunE:  runStewardHealthReport,
+}
+
+var stewardHealthBackfillCmd = &cobra.Command{
+	Use:   "backfill",
+	Short: "Import runtime Steward health snapshots into the durable ledger",
+	RunE:  runStewardHealthBackfill,
+}
+
 var stewardInterval string
 var stewardReconcilePolecatsRig string
 var stewardReconcilePolecatsDryRun bool
@@ -175,6 +194,9 @@ var stewardProposalDetails string
 var stewardProposalApproveCommand string
 var stewardProposalRejectCommand string
 var stewardProposalRisk string
+var stewardHealthDays int
+var stewardHealthRecent int
+var stewardHealthJSON bool
 
 func init() {
 	stewardStartCmd.Flags().StringVar(&stewardInterval, "interval", "1800", "Validation interval in seconds")
@@ -201,6 +223,11 @@ func init() {
 	_ = stewardProposalCreateCmd.MarkFlagRequired("title")
 	stewardProposalCmd.AddCommand(stewardProposalListCmd, stewardProposalCreateCmd, stewardProposalApproveCmd, stewardProposalRejectCmd, stewardProposalProcessApprovedCmd)
 	stewardCmd.AddCommand(stewardProposalCmd)
+	stewardHealthReportCmd.Flags().IntVar(&stewardHealthDays, "days", 7, "Days of history to include")
+	stewardHealthReportCmd.Flags().IntVar(&stewardHealthRecent, "recent", 5, "Recent ledger entries to include in JSON output")
+	stewardHealthReportCmd.Flags().BoolVar(&stewardHealthJSON, "json", false, "Output JSON")
+	stewardHealthCmd.AddCommand(stewardHealthReportCmd, stewardHealthBackfillCmd)
+	stewardCmd.AddCommand(stewardHealthCmd)
 	stewardCmd.AddCommand(stewardValidateUpgradeCmd)
 	rootCmd.AddCommand(stewardCmd)
 }
@@ -670,17 +697,70 @@ func recordStewardHealthMetric(townRoot string, metric *stewardHealthMetric, fin
 		return
 	}
 	f, err := os.OpenFile(filepath.Join(runtimeDir, "health.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return
+	if err == nil {
+		_, _ = f.Write(append(data, '\n'))
+		_ = f.Close()
 	}
-	defer f.Close()
-	_, _ = f.Write(append(data, '\n'))
+
+	snap := stewardhealth.Snapshot{
+		Timestamp:          metric.Timestamp,
+		FindingsTotal:      metric.FindingsTotal,
+		FindingsBySeverity: metric.FindingsBySeverity,
+		FindingsByKind:     metric.FindingsByKind,
+		Polecats:           metric.Polecats,
+		DirtyCoreRepos:     metric.DirtyCoreRepos,
+	}
+	if metric.Scheduler != nil {
+		snap.RecoveryBlocked = metric.Scheduler.Capacity.RecoveryBlocked
+		snap.QueuedReady = metric.Scheduler.QueuedReady
+		snap.ActiveSessions = metric.Scheduler.Capacity.ActiveSessions
+	}
+	for _, finding := range findings {
+		snap.Findings = append(snap.Findings, stewardhealth.Finding{Severity: finding.Severity, Kind: finding.Kind, Summary: finding.Summary, Detail: finding.Detail})
+	}
+	_, _ = stewardhealth.Record(townRoot, snap, stewardhealth.DefaultBucket)
 }
 
 func runStewardCapture(townRoot string, name string, args ...string) ([]byte, error) {
 	c := exec.Command(name, args...)
 	c.Dir = townRoot
 	return c.Output()
+}
+
+func runStewardHealthReport(cmd *cobra.Command, args []string) error {
+	townRoot, err := workspace.FindFromCwdOrError()
+	if err != nil {
+		return fmt.Errorf("not in a Gas Town workspace: %w", err)
+	}
+	days := stewardHealthDays
+	if days <= 0 {
+		days = 7
+	}
+	since := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
+	rep, err := stewardhealth.BuildReport(townRoot, since, stewardHealthRecent)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if stewardHealthJSON {
+		data, _ := json.MarshalIndent(rep, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+	fmt.Println(stewardhealth.FormatReport(rep))
+	return nil
+}
+
+func runStewardHealthBackfill(cmd *cobra.Command, args []string) error {
+	townRoot, err := workspace.FindFromCwdOrError()
+	if err != nil {
+		return fmt.Errorf("not in a Gas Town workspace: %w", err)
+	}
+	imported, skipped, err := stewardhealth.ImportRuntime(townRoot, stewardhealth.DefaultBucket)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Imported %d health snapshots into %s (%d duplicates skipped)\n", imported, stewardhealth.LedgerPath(townRoot), skipped)
+	return nil
 }
 
 func runStewardReconcileHealth(cmd *cobra.Command, args []string) error {

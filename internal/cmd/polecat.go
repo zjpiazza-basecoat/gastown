@@ -1431,7 +1431,7 @@ func cleanupStatusReconcileCandidate(status *RecoveryStatus, p *polecat.Polecat,
 	if status.Verdict != "SAFE_TO_NUKE" && status.Verdict != "NEEDS_MQ_SUBMIT" {
 		return previous, false
 	}
-	if status.CleanupStatus != polecat.CleanupClean {
+	if status.CleanupStatus != polecat.CleanupClean && status.CleanupStatus != previous {
 		return previous, false
 	}
 	if status.Verdict == "SAFE_TO_NUKE" && status.Branch != "" && status.MQStatus != "submitted" && status.MQStatus != "not_required" {

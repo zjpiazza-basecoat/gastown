@@ -36,7 +36,7 @@ func Validate(path string, opts IntegrityOptions) error {
 		path = cwd
 	}
 
-	marker, found, err := findGitMarker(path, opts.TownRoot)
+	marker, found, err := findGitMarker(path, opts.TownRoot, opts.Require)
 	if err != nil {
 		return err
 	}
@@ -93,7 +93,7 @@ func validateGitDir(gitdir, marker string) error {
 	return nil
 }
 
-func findGitMarker(path, townRoot string) (string, bool, error) {
+func findGitMarker(path, townRoot string, require bool) (string, bool, error) {
 	path, err := filepath.Abs(path)
 	if err != nil {
 		return "", false, fmt.Errorf("%w: resolve path %s: %v", ErrIntegrityViolation, path, err)
@@ -105,6 +105,8 @@ func findGitMarker(path, townRoot string) (string, bool, error) {
 		if err != nil {
 			return "", false, fmt.Errorf("%w: resolve town root %s: %v", ErrIntegrityViolation, townRoot, err)
 		}
+	} else if !require {
+		stop = path
 	}
 
 	for {

@@ -182,6 +182,7 @@ func SuppressBDSideEffects(env []string) []string {
 		"BD_NO_PUSH",
 		"BD_EXPORT_GIT_ADD",
 		"BD_NO_GIT_OPS",
+		"BD_DISABLE_METRICS",
 	} {
 		env = StripEnvKey(env, key)
 	}
@@ -193,6 +194,7 @@ func SuppressBDSideEffects(env []string) []string {
 		"BD_NO_PUSH=true",
 		"BD_EXPORT_GIT_ADD=false",
 		"BD_NO_GIT_OPS=true",
+		"BD_DISABLE_METRICS=1",
 	)
 }
 
