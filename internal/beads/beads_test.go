@@ -98,7 +98,8 @@ exit 2
 	}
 	t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	issue, err := New(t.TempDir()).Show("hq-wisp-abc")
+	workDir := t.TempDir()
+	issue, err := New(workDir).Show("hq-wisp-abc")
 	if err != nil {
 		t.Fatalf("Show: %v", err)
 	}
