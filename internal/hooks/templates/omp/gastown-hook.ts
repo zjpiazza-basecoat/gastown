@@ -7,7 +7,7 @@
 //   session_start       → gt prime --hook (capture context)
 //   before_agent_start  → inject captured context + check mail every prompt
 //   session.compacting  → inject compaction recovery instructions
-//   tool_call           → gt tap guard pr-workflow (on git push/pr create)
+//   tool_call           → gt tap guard pr-workflow (on PR workflow commands)
 //   session_shutdown    → gt costs record
 //
 // Loaded via: omp --hook gastown-hook.ts
@@ -104,14 +104,16 @@ export default function (pi) {
     }
   });
 
-  // PreToolUse — guard dangerous git operations via gt tap.
+  // PreToolUse — guard PR workflow operations via gt tap. Direct git push is
+  // intentionally allowed; force-push protection is handled by the
+  // dangerous-command guard.
   pi.on("tool_call", async (event, ctx) => {
     if (event.toolName === "bash" && event.input?.command) {
       const cmd = event.input.command;
       if (
-        cmd.includes("git push") ||
         cmd.includes("gh pr create") ||
-        cmd.includes("git checkout -b")
+        cmd.includes("git checkout -b") ||
+        cmd.includes("git switch -c")
       ) {
         try {
           const result = await pi.exec("gt", ["tap", "guard", "pr-workflow"]);
