@@ -343,8 +343,8 @@ func TestBuildRefineryPatrolVars_BoolFormat(t *testing.T) {
 	trueVal := true
 	falseVal2 := false
 	mq := &config.MergeQueueConfig{
-		Enabled:                         true,
-		IntegrationBranchAutoLand:       &trueVal,
+		Enabled:                          true,
+		IntegrationBranchAutoLand:        &trueVal,
 		IntegrationBranchRefineryEnabled: &trueVal,
 		RunTests:                         &trueVal,
 		SetupCommand:                     "npm ci",
@@ -742,6 +742,49 @@ func TestFindActivePatrolStale(t *testing.T) {
 	}
 	if issue.Status != "closed" {
 		t.Errorf("stale patrol status = %q, want %q", issue.Status, "closed")
+	}
+}
+
+func TestFindActivePatrolEphemeralZeroChildren(t *testing.T) {
+	requireBd(t)
+	tmpDir, b := setupPatrolTestDB(t)
+
+	molName := "mol-test-patrol"
+	assignee := "testrig/witness"
+
+	root, err := b.Create(beads.CreateOptions{
+		Title:     molName + " (wisp)",
+		Priority:  -1,
+		Ephemeral: true,
+	})
+	if err != nil {
+		t.Fatalf("create ephemeral patrol root: %v", err)
+	}
+
+	hooked := beads.StatusHooked
+	if err := b.Update(root.ID, beads.UpdateOptions{
+		Status:   &hooked,
+		Assignee: &assignee,
+	}); err != nil {
+		t.Fatalf("hook ephemeral patrol: %v", err)
+	}
+
+	cfg := PatrolConfig{
+		PatrolMolName: molName,
+		BeadsDir:      tmpDir,
+		Assignee:      assignee,
+		Beads:         b,
+	}
+
+	patrolID, _, found, findErr := findActivePatrol(cfg)
+	if findErr != nil {
+		t.Fatalf("findActivePatrol error: %v", findErr)
+	}
+	if !found {
+		t.Fatal("expected ephemeral zero-children patrol to be treated as active")
+	}
+	if patrolID != root.ID {
+		t.Errorf("patrolID = %q, want %q", patrolID, root.ID)
 	}
 }
 

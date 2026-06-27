@@ -51,14 +51,17 @@ func findActivePatrol(cfg PatrolConfig) (patrolID, patrolLine string, found bool
 		b = beads.New(cfg.BeadsDir)
 	}
 
-	// Find hooked patrol beads for this agent
-	hookedBeads, listErr := b.List(beads.ListOptions{
+	// Find hooked patrol beads for this agent. Patrol cycles are wisps
+	// (ephemeral issues stored in the wisps table), but older cycles and tests
+	// may still use issue-backed beads. Search both stores so an active patrol
+	// created by bd mol wisp create remains discoverable by gt patrol report.
+	hookedBeads, listErr := listBeadsIncludingWisps(b, beads.ListOptions{
 		Status:   beads.StatusHooked,
 		Assignee: cfg.Assignee,
 		Priority: -1,
 	})
 	if listErr != nil {
-		return "", "", false, fmt.Errorf("listing hooked beads: %w", listErr)
+		return "", "", false, fmt.Errorf("listing hooked patrol beads: %w", listErr)
 	}
 
 	// Identify active patrol and collect stale ones for cleanup.
@@ -128,7 +131,7 @@ func findActivePatrol(cfg PatrolConfig) (patrolID, patrolLine string, found bool
 // children materialized yet. This prevents findActivePatrol from closing a
 // just-created patrol during the window between root creation and step population.
 func checkHasOpenChildren(b *beads.Beads, parentID string) (bool, error) {
-	children, err := b.List(beads.ListOptions{
+	children, err := listBeadsIncludingWisps(b, beads.ListOptions{
 		Parent:   parentID,
 		Status:   "all",
 		Priority: -1,
@@ -149,6 +152,45 @@ func checkHasOpenChildren(b *beads.Beads, parentID string) (bool, error) {
 	return false, nil
 }
 
+// listBeadsIncludingWisps lists both persistent issues and ephemeral wisps matching opts.
+// Patrol cycles are created with bd mol wisp create, which stores rows in the
+// wisps table. bd list only sees the issues table, so using it alone makes
+// patrol report and hook lookup lose active wisps immediately after creation.
+func listBeadsIncludingWisps(b *beads.Beads, opts beads.ListOptions) ([]*beads.Issue, error) {
+	persistent, persistentErr := b.List(opts)
+	ephemeralOpts := opts
+	ephemeralOpts.Ephemeral = true
+	ephemeral, ephemeralErr := b.List(ephemeralOpts)
+
+	if persistentErr != nil && ephemeralErr != nil {
+		return nil, fmt.Errorf("issues: %v; wisps: %w", persistentErr, ephemeralErr)
+	}
+	if persistentErr != nil {
+		return nil, persistentErr
+	}
+	if ephemeralErr != nil {
+		return nil, ephemeralErr
+	}
+
+	seen := make(map[string]bool, len(persistent)+len(ephemeral))
+	merged := make([]*beads.Issue, 0, len(persistent)+len(ephemeral))
+	for _, issue := range persistent {
+		if issue == nil || seen[issue.ID] {
+			continue
+		}
+		seen[issue.ID] = true
+		merged = append(merged, issue)
+	}
+	for _, issue := range ephemeral {
+		if issue == nil || seen[issue.ID] {
+			continue
+		}
+		seen[issue.ID] = true
+		merged = append(merged, issue)
+	}
+	return merged, nil
+}
+
 // formatBeadLine formats a bead issue into a display line similar to bd list output.
 func formatBeadLine(issue *beads.Issue) string {
 	return fmt.Sprintf("%s  %s [%s]", issue.ID, issue.Title, issue.Status)
@@ -164,14 +206,15 @@ func burnPreviousPatrolWisps(cfg PatrolConfig) {
 		b = beads.New(cfg.BeadsDir)
 	}
 
-	// Find all hooked patrol beads for this agent
-	hookedBeads, err := b.List(beads.ListOptions{
+	// Find all hooked patrol beads for this agent across both issue-backed
+	// beads and ephemeral wisps.
+	hookedBeads, err := listBeadsIncludingWisps(b, beads.ListOptions{
 		Status:   beads.StatusHooked,
 		Assignee: cfg.Assignee,
 		Priority: -1,
 	})
 	if err != nil {
-		style.PrintWarning("burn: could not list hooked beads: %v", err)
+		style.PrintWarning("burn: could not list hooked patrol beads: %v", err)
 		return
 	}
 
@@ -339,7 +382,8 @@ func outputPatrolContext(cfg PatrolConfig) {
 				return
 			}
 		} else {
-			fmt.Printf("✓ Created and hooked patrol wisp: %s\n", patrolID)
+			fmt.Printf("✓ Created and hooked ephemeral patrol wisp: %s\n", patrolID)
+			fmt.Println(style.Dim.Render("Inspect with `bd mol wisp list --json` (wisps are not shown by plain `bd list`)."))
 		}
 	} else {
 		// Has active patrol - show status

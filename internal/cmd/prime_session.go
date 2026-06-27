@@ -338,8 +338,8 @@ func detectSessionState(ctx RoleContext) SessionState {
 			}
 		}
 
-		// Fallback: query by assignee
-		hookedBeads, err := b.List(beads.ListOptions{
+		// Fallback: query by assignee, including ephemeral wisps.
+		hookedBeads, err := listBeadsIncludingWisps(b, beads.ListOptions{
 			Status:   beads.StatusHooked,
 			Assignee: agentID,
 			Priority: -1,
@@ -350,7 +350,7 @@ func detectSessionState(ctx RoleContext) SessionState {
 			return state
 		}
 		// Also check in_progress beads
-		inProgressBeads, err := b.List(beads.ListOptions{
+		inProgressBeads, err := listBeadsIncludingWisps(b, beads.ListOptions{
 			Status:   "in_progress",
 			Assignee: agentID,
 			Priority: -1,
@@ -364,7 +364,7 @@ func detectSessionState(ctx RoleContext) SessionState {
 		// stored in townRoot/.beads. Matches prime.go and molecule_status.go. (gt-dtq7)
 		if !isTownLevelRole(agentID) && ctx.TownRoot != "" {
 			townB := beads.New(filepath.Join(ctx.TownRoot, ".beads"))
-			if townHooked, err := townB.List(beads.ListOptions{
+			if townHooked, err := listBeadsIncludingWisps(townB, beads.ListOptions{
 				Status:   beads.StatusHooked,
 				Assignee: agentID,
 				Priority: -1,
@@ -373,7 +373,7 @@ func detectSessionState(ctx RoleContext) SessionState {
 				state.HookedBead = townHooked[0].ID
 				return state
 			}
-			if townIP, err := townB.List(beads.ListOptions{
+			if townIP, err := listBeadsIncludingWisps(townB, beads.ListOptions{
 				Status:   "in_progress",
 				Assignee: agentID,
 				Priority: -1,
