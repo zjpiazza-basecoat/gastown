@@ -238,6 +238,60 @@ func stewardScriptPath(townRoot string) string {
 	return filepath.Join(townRoot, "scripts", "gt-steward-loop.sh")
 }
 
+func stewardUpgradeScriptPath(townRoot string) string {
+	return filepath.Join(townRoot, "scripts", "gt-upgrade-local.sh")
+}
+
+const stewardUpgradeScript = `#!/usr/bin/env bash
+set -euo pipefail
+
+TOWN_ROOT="${GT_TOWN_ROOT:-$HOME/gt}"
+RUNTIME="$TOWN_ROOT/.runtime/steward"
+STATE="$RUNTIME/state"
+ARTIFACTS="$RUNTIME/artifacts"
+GT_BIN="${GT_BIN:-$HOME/.local/bin/gt}"
+BD_BIN="${BD_BIN:-$HOME/.local/bin/bd}"
+
+log() { printf '\n==> %s\n' "$*"; }
+fail() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
+
+install_atomically() {
+  local src="$1" dest="$2"
+  [ -f "$src" ] || fail "tested artifact not found: $src"
+  mkdir -p "$(dirname "$dest")"
+  cp -f "$src" "$dest.new"
+  chmod 0755 "$dest.new"
+  mv -f "$dest.new" "$dest"
+}
+
+key="$(cat "$STATE/last_green" 2>/dev/null || true)"
+[ -n "$key" ] || fail "no green upgrade candidate recorded; wait for the Steward upgrade-ready message or run gt steward validate-upgrade"
+IFS=: read -r gt_sha bd_sha extra <<<"$key"
+[ -n "$gt_sha" ] && [ -n "$bd_sha" ] && [ -z "$extra" ] || fail "invalid green candidate key: $key"
+
+gt_artifact="$ARTIFACTS/gt-$gt_sha"
+bd_artifact="$ARTIFACTS/bd-$bd_sha"
+
+log "Gas Town install-only upgrade"
+log "Town root: $TOWN_ROOT"
+log "Candidate: gastown ${gt_sha:0:8} / beads ${bd_sha:0:8}"
+log "Installing previously tested binaries; no source update, tests, or builds run here."
+
+install_atomically "$gt_artifact" "$GT_BIN"
+"$GT_BIN" info | head -8 || true
+
+install_atomically "$bd_artifact" "$BD_BIN"
+"$BD_BIN" --version 2>/dev/null || "$BD_BIN" version 2>/dev/null || true
+
+log "Upgrade install complete"
+log "If rigs/daemon were running before this upgrade, consider: gt daemon restart && gt rig restart <rig>"
+
+if [ "${GT_UPGRADE_SKIP_ATTACH:-0}" != "1" ]; then
+  log "Reattaching Mayor"
+  exec "$GT_BIN" mayor attach
+fi
+`
+
 const stewardLoopScript = `#!/usr/bin/env bash
 set -euo pipefail
 
@@ -401,17 +455,27 @@ validate_once() {
   bd_sha=$(git -C "$work/beads" rev-parse HEAD)
   key="$gt_sha:$bd_sha"
 
+  local artifacts gt_artifact bd_artifact
+  artifacts="$RUNTIME/artifacts"
+  mkdir -p "$artifacts"
+  gt_artifact="$artifacts/gt-$gt_sha"
+  bd_artifact="$artifacts/bd-$bd_sha"
+
   log "validating upgrade candidate ${gt_sha:0:8}/${bd_sha:0:8}"
   (
     cd "$work/gastown"
     go test ./internal/git
     go test ./internal/cmd -run 'TestApplyAgentFieldsToCapacitySnapshot|TestPolecat|TestScheduler|TestAgent'
-    go build ./cmd/gt
+    go build -o "$gt_artifact.tmp" ./cmd/gt
+    mv -f "$gt_artifact.tmp" "$gt_artifact"
+    chmod 0755 "$gt_artifact"
   )
   (
     cd "$work/beads"
     go test ./cmd/bd
-    go build ./cmd/bd
+    go build -o "$bd_artifact.tmp" ./cmd/bd
+    mv -f "$bd_artifact.tmp" "$bd_artifact"
+    chmod 0755 "$bd_artifact"
   )
 
   if [ "$(cat "$STATE/last_green" 2>/dev/null || true)" != "$key" ]; then
@@ -419,9 +483,9 @@ validate_once() {
     /home/d3adb0y/.local/bin/gt steward proposal create \
       --kind upgrade \
       --title "Gas Town upgrade ready" \
-      --summary "Town Steward validated a green local upgrade candidate." \
-      --details "Gastown: ${gt_sha}\nBeads: ${bd_sha}\n\nTests/builds passed in isolated workspace: $work" \
-      --risk "Applies local gt/bd binaries and may require session reload/restart." \
+      --summary "Town Steward validated a green local upgrade candidate and built installable artifacts." \
+      --details "Gastown: ${gt_sha}\nBeads: ${bd_sha}\n\nTests/builds passed in isolated workspace: $work\nTested artifacts:\n- $gt_artifact\n- $bd_artifact\n\n/gt-upgrade is install-only: it copies these exact binaries and does not run tests, builds, or source updates." \
+      --risk "Installs already-tested local gt/bd binaries and may require session reload/restart." \
       --approve-command "/home/d3adb0y/gt/scripts/gt-upgrade-local.sh" || true
     log "created upgrade-ready proposal ${gt_sha:0:8}/${bd_sha:0:8}"
   else
@@ -472,6 +536,10 @@ func ensureStewardScript(townRoot string) (string, error) {
 	}
 	if err := os.WriteFile(script, []byte(stewardLoopScript), 0755); err != nil {
 		return "", fmt.Errorf("writing steward loop script: %w", err)
+	}
+	upgradeScript := stewardUpgradeScriptPath(townRoot)
+	if err := os.WriteFile(upgradeScript, []byte(stewardUpgradeScript), 0755); err != nil {
+		return "", fmt.Errorf("writing steward upgrade script: %w", err)
 	}
 	return script, nil
 }
