@@ -14,6 +14,7 @@ import (
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/scheduler/capacity"
+	"github.com/steveyegge/gastown/internal/wisp"
 )
 
 func setupPolecatCapacityTestTown(t *testing.T, maxPolecats int) string {
@@ -50,6 +51,24 @@ func setupPolecatCapacityRig(t *testing.T, maxPolecats int) string {
 	}
 	t.Cleanup(func() { _ = os.Chdir(oldWD) })
 	return townRoot
+}
+
+func TestCapacitySnapshotSkipsParkedRigs(t *testing.T) {
+	townRoot := setupPolecatCapacityRig(t, 5)
+	if err := os.MkdirAll(filepath.Join(townRoot, "gastown", "polecats", "stale"), 0755); err != nil {
+		t.Fatalf("mkdir stale polecat: %v", err)
+	}
+	if err := wisp.NewConfig(townRoot, "gastown").Set(RigStatusKey, RigStatusParked); err != nil {
+		t.Fatalf("park rig: %v", err)
+	}
+
+	snapshot, err := polecatCapacitySnapshotForTown(townRoot)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if snapshot.RecoveryBlocked != 0 || snapshot.Free != 5 {
+		t.Fatalf("snapshot = %+v, want parked rig ignored with free=5 recovery=0", snapshot)
+	}
 }
 
 func TestCapacitySnapshotCleansStaleReservations(t *testing.T) {

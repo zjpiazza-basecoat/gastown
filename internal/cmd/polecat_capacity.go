@@ -178,6 +178,9 @@ func polecatCapacitySnapshotForTownNoCleanup(townRoot string) (polecatCapacitySn
 
 	tmuxClient := tmux.NewTmux()
 	for rigName := range rigsConfig.Rigs {
+		if blocked, _ := IsRigParkedOrDocked(townRoot, rigName); blocked {
+			continue
+		}
 		rigPath := filepath.Join(townRoot, rigName)
 		if _, err := os.Stat(rigPath); err != nil {
 			continue

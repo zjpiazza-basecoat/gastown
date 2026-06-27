@@ -244,7 +244,8 @@ set -euo pipefail
 TOWN_ROOT="${GT_TOWN_ROOT:-$HOME/gt}"
 HALL="${GT_GASTOWNHALL:-$HOME/code/gastownhall}"
 RUNTIME="$TOWN_ROOT/.runtime/steward"
-INTERVAL="${GT_STEWARD_INTERVAL:-1800}"
+INTERVAL="${GT_STEWARD_INTERVAL:-300}"
+VALIDATION_INTERVAL="${GT_STEWARD_VALIDATION_INTERVAL:-1800}"
 STATE="$RUNTIME/state"
 LOG="$RUNTIME/steward.log"
 mkdir -p "$RUNTIME" "$STATE"
@@ -289,6 +290,9 @@ sys.exit(1)
 PY
 }
 
+record_state() { printf '%s' "$2" > "$STATE/$1"; }
+record_json_state() { cp -f "$2" "$STATE/$1" 2>/dev/null || true; }
+
 create_unhealthy_proposal_once() {
   local details
   details=$(python3 - "$STATE/health-after.json" <<'PY'
@@ -305,10 +309,33 @@ PY
   /home/d3adb0y/.local/bin/gt steward proposal create \
     --kind health \
     --title "Gas Town health still unhealthy after safe reconciliation" \
-    --summary "Steward safe health reconciliation ran, but gt health still reports findings that require manual review." \
+    --summary "Owner: steward. Next action: review remaining gt health findings and approve the remediation command if the orphan/user-table cleanup is expected; otherwise inspect and file a narrower core bug." \
     --details "$details" \
     --risk "Approval runs gt dolt cleanup --force, which removes orphan databases that safe cleanup refused." \
     --approve-command "gt dolt cleanup --force && gt steward reconcile-health" || true
+}
+
+create_recovery_debt_proposal_once() {
+  local details
+  details=$(python3 - "$STATE/scheduler-after.json" "$STATE/polecats-all.json" <<'PY'
+import json, sys
+parts=[]
+for path in sys.argv[1:]:
+    try:
+        with open(path) as f: data=json.load(f)
+        parts.append(f"{path}:\n"+json.dumps(data, indent=2)[:3000])
+    except Exception as exc:
+        parts.append(f"{path}: {exc}")
+print("\n\n".join(parts))
+PY
+)
+  /home/d3adb0y/.local/bin/gt steward proposal create \
+    --kind recovery \
+    --title "Polecat recovery debt remains after safe reconciliation" \
+    --summary "Scheduler still reports recovery_blocked capacity after Steward safe polecat reconciliation. Owner: steward. Next action: inspect listed rigs/polecats; parked/docked rigs should not count toward scheduler capacity; otherwise reconcile or nuke only when safe." \
+    --details "$details" \
+    --risk "Approval may run conservative recovery checks only; destructive nuke remains guarded by gt polecat nuke safety checks." \
+    --approve-command "gt steward reconcile-polecats --rig app && gt scheduler status --json" || true
 }
 
 process_approved_proposals_once() {
@@ -317,16 +344,20 @@ process_approved_proposals_once() {
 }
 
 reconcile_health_once() {
+  record_state last_action "health scan"
   log "health scan"
-  timeout 120 /home/d3adb0y/.local/bin/gt steward scan >>"$LOG" 2>&1 || log "steward scan timed out/failed; continuing"
+  timeout 120 /home/d3adb0y/.local/bin/gt steward scan >"$STATE/last-scan.txt" 2>>"$LOG" || log "steward scan timed out/failed; continuing"
+  cat "$STATE/last-scan.txt" >>"$LOG" 2>/dev/null || true
   if ! timeout 30 /home/d3adb0y/.local/bin/gt health --json >"$STATE/health-before.json" 2>>"$LOG"; then
     log "gt health unavailable; skipping automatic health reconciliation"
     return 0
   fi
   if health_has_findings "$STATE/health-before.json"; then
     log "gt health findings detected; running safe reconciliation"
+    record_state last_action "safe health reconciliation"
     timeout 90 /home/d3adb0y/.local/bin/gt steward reconcile-health >>"$LOG" 2>&1 || log "reconcile-health timed out/failed; continuing"
     timeout 30 /home/d3adb0y/.local/bin/gt health --json >"$STATE/health-after.json" 2>>"$LOG" || true
+    record_json_state outstanding-health.json "$STATE/health-after.json"
     if health_has_findings "$STATE/health-after.json"; then
       log "gt health remains unhealthy after safe reconciliation; creating/deduping proposal"
       create_unhealthy_proposal_once
@@ -339,8 +370,24 @@ reconcile_health_once() {
 }
 
 reconcile_polecats_once() {
+  record_state last_action "polecat recovery reconciliation"
   log "polecat recovery reconciliation"
-  timeout 300 /home/d3adb0y/.local/bin/gt steward reconcile-polecats --rig app >>"$LOG" 2>&1 || log "reconcile-polecats timed out/failed; continuing"
+  timeout 300 /home/d3adb0y/.local/bin/gt steward reconcile-polecats --rig app >"$STATE/reconcile-polecats.json" 2>>"$LOG" || log "reconcile-polecats timed out/failed; continuing"
+  cat "$STATE/reconcile-polecats.json" >>"$LOG" 2>/dev/null || true
+  timeout 30 /home/d3adb0y/.local/bin/gt scheduler status --json >"$STATE/scheduler-after.json" 2>>"$LOG" || true
+  timeout 60 /home/d3adb0y/.local/bin/gt polecat list --all --json >"$STATE/polecats-all.json" 2>>"$LOG" || true
+  if python3 - "$STATE/scheduler-after.json" <<'PY'
+import json, sys
+try:
+    data=json.load(open(sys.argv[1])); rb=int(((data.get('capacity') or {}).get('recovery_blocked')) or 0)
+except Exception:
+    rb=0
+sys.exit(0 if rb>0 else 1)
+PY
+  then
+    log "recovery debt remains after safe reconciliation; creating/deduping proposal"
+    create_recovery_debt_proposal_once
+  fi
 }
 
 validate_once() {
@@ -382,18 +429,35 @@ validate_once() {
   fi
 }
 
-log "Town Steward started (interval=${INTERVAL}s)"
+log "Town Steward started (interval=${INTERVAL}s validation_interval=${VALIDATION_INTERVAL}s)"
 while true; do
+  cycle_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  record_state last_patrol_start "$cycle_start"
   process_approved_proposals_once >>"$LOG" 2>&1 || true
   reconcile_health_once >>"$LOG" 2>&1 || true
   reconcile_polecats_once >>"$LOG" 2>&1 || true
-  if validate_once >>"$LOG" 2>&1; then
-    log "validation pass complete"
+  now_epoch=$(date -u +%s)
+  last_validation_epoch=$(cat "$STATE/last_validation_epoch" 2>/dev/null || echo 0)
+  if [ $((now_epoch - last_validation_epoch)) -ge "$VALIDATION_INTERVAL" ]; then
+    record_state last_action "upgrade validation"
+    if validate_once >>"$LOG" 2>&1; then
+      date -u +%s > "$STATE/last_validation_epoch"
+      log "validation pass complete"
+    else
+      status=$?
+      log "validation failed with status $status; not announcing upgrade"
+      date -u +%Y-%m-%dT%H:%M:%SZ > "$STATE/last_red_at"
+    fi
   else
-    status=$?
-    log "validation failed with status $status; not announcing upgrade"
-    date -u +%Y-%m-%dT%H:%M:%SZ > "$STATE/last_red_at"
+    log "validation skipped until interval elapses"
   fi
+  cycle_end=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  record_state last_patrol_end "$cycle_end"
+  next_epoch=$(($(date -u +%s) + INTERVAL))
+  python3 - "$next_epoch" > "$STATE/next_patrol_at" <<'PY'
+import datetime, sys
+print(datetime.datetime.fromtimestamp(int(sys.argv[1]), datetime.UTC).strftime('%Y-%m-%dT%H:%M:%SZ'))
+PY
   if [ "${GT_STEWARD_ONCE:-0}" = "1" ]; then
     exit 0
   fi
@@ -492,10 +556,40 @@ func runStewardRestart(cmd *cobra.Command, args []string) error {
 }
 
 func runStewardStatus(cmd *cobra.Command, args []string) error {
+	townRoot, _ := workspace.FindFromCwdOrError()
 	if stewardIsRunning() {
 		fmt.Printf("%s Town Steward is running (%s)\n", style.Bold.Render("✓"), stewardSessionName())
 	} else {
 		fmt.Printf("%s Town Steward is not running\n", style.Bold.Render("○"))
+	}
+	if townRoot != "" {
+		stateDir := filepath.Join(townRoot, ".runtime", "steward", "state")
+		showState := func(label, name string) {
+			if b, err := os.ReadFile(filepath.Join(stateDir, name)); err == nil {
+				v := strings.TrimSpace(string(b))
+				if v != "" {
+					fmt.Printf("  %s: %s\n", label, v)
+				}
+			}
+		}
+		showState("Last patrol start", "last_patrol_start")
+		showState("Last patrol end", "last_patrol_end")
+		showState("Next patrol", "next_patrol_at")
+		showState("Last action", "last_action")
+		if b, err := os.ReadFile(filepath.Join(stateDir, "outstanding-health.json")); err == nil {
+			var h stewardGTHealth
+			if json.Unmarshal(b, &h) == nil {
+				if !h.Server.Running || h.Processes.ZombieCount > 0 || len(h.Orphans) > 0 {
+					fmt.Printf("  Outstanding health: server_running=%v zombies=%d orphans=%d\n", h.Server.Running, h.Processes.ZombieCount, len(h.Orphans))
+				}
+			}
+		}
+		if b, err := os.ReadFile(filepath.Join(stateDir, "scheduler-after.json")); err == nil {
+			var s stewardSchedulerStatus
+			if json.Unmarshal(b, &s) == nil && s.Capacity.RecoveryBlocked > 0 {
+				fmt.Printf("  Outstanding recovery debt: %d\n", s.Capacity.RecoveryBlocked)
+			}
+		}
 	}
 	return nil
 }
@@ -629,7 +723,7 @@ func runStewardScan(cmd *cobra.Command, args []string) error {
 		report.Findings = append(report.Findings, stewardFinding{Severity: "medium", Kind: "scheduler-status-unavailable", Summary: "Could not read scheduler status", Detail: err.Error()})
 	}
 
-	if out, err := runStewardCapture(townRoot, "gt", "polecat", "list", "app", "--all", "--json"); err == nil {
+	if out, err := runStewardCapture(townRoot, "gt", "polecat", "list", "app", "--json"); err == nil {
 		var items []polecatListItem
 		if json.Unmarshal(out, &items) == nil {
 			counts := map[string]int{}
