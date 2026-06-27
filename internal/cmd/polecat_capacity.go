@@ -193,12 +193,28 @@ func polecatCapacitySnapshotForTownNoCleanup(townRoot string) (polecatCapacitySn
 			continue
 		}
 
+		mgr := polecat.NewManager(&rig.Rig{Name: rigName, Path: rigPath}, git.NewGit(rigPath), tmuxClient)
 		agents, err := beads.New(rigPath).ListAgentBeads()
 		if err != nil {
 			return snapshot, fmt.Errorf("listing agent beads for %s capacity: %w", rigName, err)
 		}
 		prefix := beads.GetPrefixForRig(townRoot, rigName)
 		for _, name := range polecatNames {
+			// Prefer the same canonical manager path used by `gt polecat list`.
+			// Agent beads can live outside the product issue DB; reading only the
+			// rig-local bead snapshot made scheduler capacity count closed/misfiled
+			// agent records as live working sessions.
+			if p, err := mgr.Get(name); err == nil && p != nil {
+				running := false
+				if tmuxClient != nil {
+					running, _ = tmuxClient.HasSession(session.PolecatSessionName(session.PrefixFor(rigName), name))
+				}
+				state := effectivePolecatState(PolecatListItem{State: p.State, Issue: p.Issue, SessionRunning: running})
+				disposition := mgr.WorkstateDispositionForPolecat(name, state, p.Issue)
+				applyWorkstateDispositionToCapacitySnapshot(&snapshot, state, disposition)
+				continue
+			}
+
 			agentID := beads.PolecatBeadIDWithPrefix(prefix, rigName, name)
 			issue := agents[agentID]
 			fields := (*beads.AgentFields)(nil)
