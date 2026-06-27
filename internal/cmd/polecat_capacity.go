@@ -256,7 +256,22 @@ func applyAgentFieldsToCapacitySnapshot(snapshot *polecatCapacitySnapshot, rigPa
 	}
 
 	state := strings.TrimSpace(fields.AgentState)
-	if state == "working" || state == "spawning" {
+	if state == "working" {
+		// Capacity must use the same canonical workstate as list/recovery when
+		// a rig path is available. A live session can be stale after the durable
+		// source/MR has closed; counting agent_state=working unconditionally makes
+		// scheduler capacity disagree with `gt polecat list` and blocks dispatch.
+		if rigPath != "" && applyCanonicalCapacitySnapshot(snapshot, rigPath, rigName, polecatName, fields, tmuxClient) {
+			return
+		}
+		if running {
+			snapshot.Working++
+		} else {
+			snapshot.RecoveryBlocked++
+		}
+		return
+	}
+	if state == "spawning" {
 		if running {
 			snapshot.Working++
 		} else {
