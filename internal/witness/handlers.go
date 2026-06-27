@@ -15,10 +15,12 @@ import (
 	"sync"
 	"time"
 
+	beadsdk "github.com/steveyegge/beads"
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/channelevents"
 	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/constants"
+	"github.com/steveyegge/gastown/internal/convoy"
 	"github.com/steveyegge/gastown/internal/git"
 	"github.com/steveyegge/gastown/internal/mail"
 	"github.com/steveyegge/gastown/internal/mayor"
@@ -53,6 +55,39 @@ func workDirToTownRoot(workDir string) string {
 		return townRoot
 	}
 	return workDir
+}
+
+// checkConvoysForClosedHook propagates closed-hook completion signals to convoy
+// tracking from the witness zombie patrol. This covers the gap where a polecat
+// closes its bead but dies or skips `gt done`, so no MR/MERGED signal is ever
+// produced to trigger the normal convoy completion path.
+func checkConvoysForClosedHook(workDir, hookBead string) error {
+	if hookBead == "" {
+		return nil
+	}
+
+	townRoot := workDirToTownRoot(workDir)
+	if townRoot == "" {
+		return nil
+	}
+
+	ctx := context.Background()
+	store, err := beadsdk.Open(ctx, filepath.Join(townRoot, ".beads"))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = store.Close() }()
+
+	gtPath, err := os.Executable()
+	if err != nil || gtPath == "" {
+		gtPath, _ = exec.LookPath("gt")
+	}
+	if gtPath == "" {
+		return fmt.Errorf("gt executable not found")
+	}
+
+	convoy.CheckConvoysForIssue(ctx, store, townRoot, hookBead, "Witness", nil, gtPath, nil)
+	return nil
 }
 
 // registryMu serializes calls to initRegistryFromTownRoot so that concurrent
@@ -1861,6 +1896,15 @@ func detectZombieLiveSession(bd *BdCli, workDir, townRoot, rigName, polecatName,
 			WasActive:      true,
 			Action:         "restarted-bead-closed-polecat",
 		}
+		// A closed hook bead is a completion signal even when the polecat skipped or
+		// died before `gt done`. Propagate it to convoy tracking here so 100%
+		// complete convoys do not wait forever for a MERGED signal that will never
+		// arrive. Best-effort only: daemon event polling and gt close are backup
+		// paths, and restart must still proceed if convoy checking fails.
+		if err := checkConvoysForClosedHook(workDir, snapHook); err != nil {
+			zombie.Action = fmt.Sprintf("%s (convoy-check-failed: %v)", zombie.Action, err)
+		}
+
 		// TOCTOU guard (gt-0pst): Re-check session liveness before restarting.
 		// The session could have exited normally between our initial check and here.
 		if alive, _ := t.HasSession(sessionName); !alive {

@@ -1383,6 +1383,13 @@ func TestGetBeadStatus_EmptyBeadID(t *testing.T) {
 	}
 }
 
+func TestCheckConvoysForClosedHook_EmptyHookNoop(t *testing.T) {
+	t.Parallel()
+	if err := checkConvoysForClosedHook(t.TempDir(), ""); err != nil {
+		t.Fatalf("checkConvoysForClosedHook empty hook = %v, want nil", err)
+	}
+}
+
 func TestDetectZombie_BeadClosedStillRunning(t *testing.T) {
 	t.Parallel()
 	// Verify the logic: live session + agent alive + hooked bead closed → zombie
