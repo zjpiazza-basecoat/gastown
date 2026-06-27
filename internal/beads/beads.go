@@ -1265,6 +1265,9 @@ func (b *Beads) Show(id string) (*Issue, error) {
 
 	out, err := b.run("show", id, "--json")
 	if err != nil {
+		if issue, wispErr := b.showEphemeral(id); wispErr == nil {
+			return issue, nil
+		}
 		return nil, err
 	}
 
@@ -1275,9 +1278,36 @@ func (b *Beads) Show(id string) (*Issue, error) {
 	}
 
 	if len(issues) == 0 {
+		if issue, wispErr := b.showEphemeral(id); wispErr == nil {
+			return issue, nil
+		}
 		return nil, ErrNotFound
 	}
 
+	return issues[0], nil
+}
+
+// showEphemeral returns a wisp-table issue by ID. bd show only reads the
+// persistent issues table in some beads versions, while operational workflows
+// (patrol cycles, merge requests) create hq-wisp/gt-wisp rows in the wisps
+// table. Falling back here makes returned wisp IDs resolvable to gt callers.
+func (b *Beads) showEphemeral(id string) (*Issue, error) {
+	queryExpr := "ephemeral=true AND id=" + quoteBDQueryValue(id)
+	out, err := b.run("query", "--json", queryExpr, "--all", "--limit=0")
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 || !isJSONBytes(out) {
+		return nil, ErrNotFound
+	}
+
+	var issues []*Issue
+	if err := json.Unmarshal(out, &issues); err != nil {
+		return nil, fmt.Errorf("parsing bd query output: %w", err)
+	}
+	if len(issues) == 0 {
+		return nil, ErrNotFound
+	}
 	return issues[0], nil
 }
 
