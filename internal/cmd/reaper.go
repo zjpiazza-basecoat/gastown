@@ -140,6 +140,7 @@ The Dog uses this to understand the state before deciding what to reap.`,
 				continue
 			} else if !ok {
 				db.Close()
+				results = append(results, reaper.MissingSchemaScanResult(dbName))
 				continue
 			}
 

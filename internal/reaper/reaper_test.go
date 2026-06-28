@@ -60,6 +60,29 @@ func TestFormatJSON(t *testing.T) {
 	}
 }
 
+func TestMissingSchemaScanResult(t *testing.T) {
+	result := MissingSchemaScanResult("camera_bridge")
+	if result == nil {
+		t.Fatal("MissingSchemaScanResult returned nil")
+	}
+	if result.Database != "camera_bridge" {
+		t.Fatalf("Database = %q, want camera_bridge", result.Database)
+	}
+	if result.ReapCandidates != 0 || result.PurgeCandidates != 0 || result.MailCandidates != 0 || result.StaleCandidates != 0 || result.OpenWisps != 0 {
+		t.Fatalf("missing-schema scan result should have zero counts: %#v", result)
+	}
+	if len(result.Anomalies) != 1 {
+		t.Fatalf("Anomalies len = %d, want 1", len(result.Anomalies))
+	}
+	if result.Anomalies[0].Type != "missing_reaper_schema" {
+		t.Fatalf("Anomaly type = %q, want missing_reaper_schema", result.Anomalies[0].Type)
+	}
+	json := FormatJSON(result)
+	if strings.Contains(json, "null") {
+		t.Fatalf("missing-schema result JSON should not contain null: %s", json)
+	}
+}
+
 func TestParentExcludeJoin(t *testing.T) {
 	joinClause, whereCondition := parentExcludeJoin("testdb")
 

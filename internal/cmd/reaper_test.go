@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -14,6 +16,17 @@ func TestReaperDatabaseNamesTrimsConfiguredList(t *testing.T) {
 	want := []string{"hq", "gastown", "beads"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("reaperDatabaseNames() = %#v, want %#v", got, want)
+	}
+}
+
+func TestReaperScanReportsMissingSchemaDatabases(t *testing.T) {
+	data, err := os.ReadFile("reaper.go")
+	if err != nil {
+		t.Fatalf("read reaper.go: %v", err)
+	}
+	body := string(data)
+	if !strings.Contains(body, "results = append(results, reaper.MissingSchemaScanResult(dbName))") {
+		t.Fatal("reaper scan should append an explicit missing-schema result instead of omitting the database")
 	}
 }
 

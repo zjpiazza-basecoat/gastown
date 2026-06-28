@@ -299,6 +299,18 @@ func hasColumns(ctx context.Context, db *sql.DB, table string, columns ...string
 	return count == len(columns), err
 }
 
+// MissingSchemaScanResult returns an explicit zero-count scan result for a
+// database that does not contain the tables needed by reaper operations.
+func MissingSchemaScanResult(dbName string) *ScanResult {
+	return &ScanResult{
+		Database: dbName,
+		Anomalies: []Anomaly{{
+			Type:    "missing_reaper_schema",
+			Message: "database has no reaper schema; skipped",
+		}},
+	}
+}
+
 // Scan counts reaper candidates in a database without modifying anything.
 func Scan(db *sql.DB, dbName string, maxAge, purgeAge, mailDeleteAge, staleIssueAge time.Duration) (*ScanResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultQueryTimeout)
