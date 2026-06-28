@@ -3274,9 +3274,13 @@ func (t *Tmux) GetSessionCreatedTime(name string) (time.Time, error) {
 	return time.Unix(unix, 0), nil
 }
 
-// ApplyTheme sets the status bar style for a session.
+// ApplyTheme sets the status bar foreground for a session without painting a
+// full-width background. Gas Town sessions often run inside user-themed tmux
+// configs (for example Catppuccin window pills); setting status-style bg here
+// creates a solid band behind those pills. Keep the base bar transparent and
+// let status-left/status-right carry any explicit accents.
 func (t *Tmux) ApplyTheme(session string, theme Theme) error {
-	_, err := t.run("set-option", "-t", session, "status-style", theme.Style())
+	_, err := t.run("set-option", "-t", session, "status-style", fmt.Sprintf("bg=default,fg=%s", theme.FG))
 	return err
 }
 
