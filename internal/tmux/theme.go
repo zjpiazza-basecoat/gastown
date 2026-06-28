@@ -31,19 +31,22 @@ type Theme struct {
 	Window *WindowStyle `json:"window,omitempty"`
 }
 
-// DefaultPalette is the curated set of distinct, professional color themes.
-// Each theme has good contrast and is visually distinct from others.
+// DefaultPalette is the curated set of distinct tmux status themes.
+//
+// Keep these aligned with Catppuccin Mocha so Gas Town's injected status bar
+// blends with users who run the Catppuccin tmux plugin. Older earth-tone themes
+// made rig sessions stand out as brown/green bands against Mocha window pills.
 var DefaultPalette = []Theme{
-	{Name: "ocean", BG: "#1e3a5f", FG: "#e0e0e0"},    // Deep blue
-	{Name: "forest", BG: "#2d5a3d", FG: "#e0e0e0"},   // Forest green
-	{Name: "rust", BG: "#8b4513", FG: "#f5f5dc"},     // Rust/brown
-	{Name: "plum", BG: "#4a3050", FG: "#e0e0e0"},     // Purple
-	{Name: "slate", BG: "#4a5568", FG: "#e0e0e0"},    // Slate gray
-	{Name: "ember", BG: "#b33a00", FG: "#f5f5dc"},    // Burnt orange
-	{Name: "midnight", BG: "#1a1a2e", FG: "#c0c0c0"}, // Dark blue-black
-	{Name: "wine", BG: "#722f37", FG: "#f5f5dc"},     // Burgundy
-	{Name: "teal", BG: "#0d5c63", FG: "#e0e0e0"},     // Teal
-	{Name: "copper", BG: "#6d4c41", FG: "#f5f5dc"},   // Warm brown
+	{Name: "mocha", BG: "#1e1e2e", FG: "#cdd6f4"},    // Catppuccin base/text
+	{Name: "mauve", BG: "#302d41", FG: "#cba6f7"},    // Purple accent, muted bg
+	{Name: "sapphire", BG: "#1f3347", FG: "#74c7ec"}, // Blue accent, muted bg
+	{Name: "teal", BG: "#1f3a3a", FG: "#94e2d5"},     // Teal accent, muted bg
+	{Name: "green", BG: "#263a2f", FG: "#a6e3a1"},    // Green accent, muted bg
+	{Name: "peach", BG: "#3f3028", FG: "#fab387"},    // Warm accent, muted bg
+	{Name: "maroon", BG: "#3d2932", FG: "#eba0ac"},   // Red accent, muted bg
+	{Name: "lavender", BG: "#2b3046", FG: "#b4befe"}, // Lavender accent, muted bg
+	{Name: "surface", BG: "#313244", FG: "#cdd6f4"},  // Mocha surface0/text
+	{Name: "overlay", BG: "#45475a", FG: "#cdd6f4"},  // Mocha surface1/text
 }
 
 // MayorTheme returns the special theme for the Mayor session.
@@ -56,24 +59,40 @@ func MayorTheme() Theme {
 // DeaconTheme returns the special theme for the Deacon session.
 // Purple/silver - ecclesiastical, distinct from Mayor's gold.
 func DeaconTheme() Theme {
-	return Theme{Name: "deacon", BG: "#2d1f3d", FG: "#c0b0d0"}
+	return Theme{Name: "deacon", BG: "#302d41", FG: "#cba6f7"}
 }
 
 // DogTheme returns the theme for Dog sessions.
 // Brown/tan - earthy, loyal worker aesthetic.
 func DogTheme() Theme {
-	return Theme{Name: "dog", BG: "#3d2f1f", FG: "#d0c0a0"}
+	return Theme{Name: "dog", BG: "#3f3028", FG: "#fab387"}
 }
 
 // GetThemeByName finds a theme by name from the default palette.
-// Returns nil if not found.
+// Returns nil if not found. Legacy earth-tone names are kept as aliases so
+// existing rig configs continue to resolve after the Mocha palette refresh.
 func GetThemeByName(name string) *Theme {
+	if alias, ok := legacyThemeAliases[name]; ok {
+		name = alias
+	}
 	for _, t := range DefaultPalette {
 		if t.Name == name {
 			return &t
 		}
 	}
 	return nil
+}
+
+var legacyThemeAliases = map[string]string{
+	"ocean":    "sapphire",
+	"forest":   "green",
+	"rust":     "peach",
+	"plum":     "mauve",
+	"slate":    "surface",
+	"ember":    "peach",
+	"midnight": "mocha",
+	"wine":     "maroon",
+	"copper":   "peach",
 }
 
 // AssignTheme picks a theme for a rig based on its name.

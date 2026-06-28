@@ -36,11 +36,11 @@ func TestAssignTheme_Distribution(t *testing.T) {
 func TestGetThemeByName(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name  string
-		want  bool
+		name string
+		want bool
 	}{
-		{"ocean", true},
-		{"forest", true},
+		{"mocha", true},
+		{"mauve", true},
 		{"nonexistent", false},
 		{"", false},
 	}
@@ -50,6 +50,22 @@ func TestGetThemeByName(t *testing.T) {
 		got := theme != nil
 		if got != tt.want {
 			t.Errorf("GetThemeByName(%q) = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestGetThemeByName_LegacyAliases(t *testing.T) {
+	t.Parallel()
+	tests := map[string]string{
+		"ocean":  "sapphire",
+		"forest": "green",
+		"rust":   "peach",
+		"plum":   "mauve",
+	}
+	for legacy, want := range tests {
+		got := GetThemeByName(legacy)
+		if got == nil || got.Name != want {
+			t.Fatalf("GetThemeByName(%q) = %+v, want %s", legacy, got, want)
 		}
 	}
 }
@@ -93,7 +109,7 @@ func TestListThemeNames(t *testing.T) {
 		found[name] = true
 	}
 
-	for _, want := range []string{"ocean", "forest", "rust"} {
+	for _, want := range []string{"mocha", "mauve", "sapphire"} {
 		if !found[want] {
 			t.Errorf("ListThemeNames() missing %q", want)
 		}

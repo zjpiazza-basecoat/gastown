@@ -43,15 +43,15 @@ func TestResolveSessionTheme_NamedRigTheme(t *testing.T) {
 
 	townRoot := t.TempDir()
 	settings := config.NewRigSettings()
-	settings.Theme = &config.ThemeConfig{Name: "forest"}
+	settings.Theme = &config.ThemeConfig{Name: "mauve"}
 	rigPath := filepath.Join(townRoot, "gastown")
 	if err := config.SaveRigSettings(config.RigSettingsPath(rigPath), settings); err != nil {
 		t.Fatalf("SaveRigSettings: %v", err)
 	}
 
 	got := ResolveSessionTheme(townRoot, "gastown", "crew", "")
-	if got == nil || got.Name != "forest" {
-		t.Fatalf("ResolveSessionTheme = %+v, want forest", got)
+	if got == nil || got.Name != "mauve" {
+		t.Fatalf("ResolveSessionTheme = %+v, want mauve", got)
 	}
 }
 
@@ -105,8 +105,8 @@ func TestResolveSessionTheme_MayorAndDeaconTownOverrides(t *testing.T) {
 	mayorCfg := config.NewMayorConfig()
 	mayorCfg.Theme = &config.TownThemeConfig{
 		RoleDefaults: map[string]string{
-			"mayor":  "forest",
-			"deacon": "plum",
+			"mayor":  "green",
+			"deacon": "mauve",
 		},
 	}
 	if err := config.SaveMayorConfig(filepath.Join(townRoot, "mayor", "config.json"), mayorCfg); err != nil {
@@ -114,13 +114,13 @@ func TestResolveSessionTheme_MayorAndDeaconTownOverrides(t *testing.T) {
 	}
 
 	mayorTheme := ResolveSessionTheme(townRoot, "", "mayor", "")
-	if mayorTheme == nil || mayorTheme.Name != "forest" {
-		t.Fatalf("mayor theme = %+v, want forest", mayorTheme)
+	if mayorTheme == nil || mayorTheme.Name != "green" {
+		t.Fatalf("mayor theme = %+v, want green", mayorTheme)
 	}
 
 	deaconTheme := ResolveSessionTheme(townRoot, "", "deacon", "")
-	if deaconTheme == nil || deaconTheme.Name != "plum" {
-		t.Fatalf("deacon theme = %+v, want plum", deaconTheme)
+	if deaconTheme == nil || deaconTheme.Name != "mauve" {
+		t.Fatalf("deacon theme = %+v, want mauve", deaconTheme)
 	}
 }
 
@@ -130,10 +130,10 @@ func TestResolveSessionTheme_CrewMemberOverride(t *testing.T) {
 	townRoot := t.TempDir()
 	settings := config.NewRigSettings()
 	settings.Theme = &config.ThemeConfig{
-		Name: "ocean",
+		Name: "sapphire",
 		CrewThemes: map[string]string{
 			"krieger": "teal",
-			"mallory": "ember",
+			"mallory": "peach",
 		},
 	}
 	rigPath := filepath.Join(townRoot, "gastown")
@@ -148,20 +148,20 @@ func TestResolveSessionTheme_CrewMemberOverride(t *testing.T) {
 	}
 
 	mallory := ResolveSessionTheme(townRoot, "gastown", "crew", "mallory")
-	if mallory == nil || mallory.Name != "ember" {
-		t.Fatalf("mallory theme = %+v, want ember", mallory)
+	if mallory == nil || mallory.Name != "peach" {
+		t.Fatalf("mallory theme = %+v, want peach", mallory)
 	}
 
 	// Unlisted crew member falls back to rig theme.
 	other := ResolveSessionTheme(townRoot, "gastown", "crew", "cyril")
-	if other == nil || other.Name != "ocean" {
-		t.Fatalf("cyril theme = %+v, want ocean (rig fallback)", other)
+	if other == nil || other.Name != "sapphire" {
+		t.Fatalf("cyril theme = %+v, want sapphire (rig fallback)", other)
 	}
 
 	// Empty crew member also falls back to rig theme.
 	empty := ResolveSessionTheme(townRoot, "gastown", "crew", "")
-	if empty == nil || empty.Name != "ocean" {
-		t.Fatalf("empty member theme = %+v, want ocean (rig fallback)", empty)
+	if empty == nil || empty.Name != "sapphire" {
+		t.Fatalf("empty member theme = %+v, want sapphire (rig fallback)", empty)
 	}
 }
 
@@ -171,7 +171,7 @@ func TestResolveSessionTheme_CrewMemberNoneDisables(t *testing.T) {
 	townRoot := t.TempDir()
 	settings := config.NewRigSettings()
 	settings.Theme = &config.ThemeConfig{
-		Name: "ocean",
+		Name: "sapphire",
 		CrewThemes: map[string]string{
 			"krieger": "none",
 		},
@@ -196,7 +196,7 @@ func TestResolveSessionTheme_CrewMemberTownFallback(t *testing.T) {
 	mayorCfg := config.NewMayorConfig()
 	mayorCfg.Theme = &config.TownThemeConfig{
 		CrewThemes: map[string]string{
-			"krieger": "wine",
+			"krieger": "maroon",
 		},
 	}
 	if err := config.SaveMayorConfig(filepath.Join(townRoot, "mayor", "config.json"), mayorCfg); err != nil {
@@ -204,8 +204,8 @@ func TestResolveSessionTheme_CrewMemberTownFallback(t *testing.T) {
 	}
 
 	got := ResolveSessionTheme(townRoot, "gastown", "crew", "krieger")
-	if got == nil || got.Name != "wine" {
-		t.Fatalf("krieger town theme = %+v, want wine", got)
+	if got == nil || got.Name != "maroon" {
+		t.Fatalf("krieger town theme = %+v, want maroon", got)
 	}
 }
 
@@ -226,11 +226,11 @@ func TestResolveSessionTheme_CrewMemberRigOverridesTown(t *testing.T) {
 		t.Fatalf("SaveRigSettings: %v", err)
 	}
 
-	// Town-level: krieger=wine
+	// Town-level: krieger=maroon
 	mayorCfg := config.NewMayorConfig()
 	mayorCfg.Theme = &config.TownThemeConfig{
 		CrewThemes: map[string]string{
-			"krieger": "wine",
+			"krieger": "maroon",
 		},
 	}
 	if err := config.SaveMayorConfig(filepath.Join(townRoot, "mayor", "config.json"), mayorCfg); err != nil {
